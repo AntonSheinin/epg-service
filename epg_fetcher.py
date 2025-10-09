@@ -1,11 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import logging
+import asyncio
 
 import aiosqlite
 import httpx
+import aiofiles
 
 from app.config import settings
 from app.xmltv_parser import parse_xmltv_file
+
+logger = logging.getLogger("epg_service.fetcher")
 
 
 async def fetch_and_process() -> dict:
@@ -15,34 +20,30 @@ async def fetch_and_process() -> dict:
     Returns:
         Dictionary with fetch statistics or error
     """
-    print(f"\n{'='*60}")
-    print(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
-    print(f"{'='*60}\n")
+    logger.info("="*60)
+    logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
+    logger.info("="*60)
 
     if not settings.epg_source_url:
+        logger.error("EPG_SOURCE_URL not configured")
         return {"error": "EPG_SOURCE_URL not configured"}
 
+    temp_file = None
     try:
-        # Calculate time window
         now = datetime.now(timezone.utc)
         time_from = now - timedelta(days=14)
         time_to = now + timedelta(days=7)
 
-        print(f"Time window: {time_from.date()} to {time_to.date()}")
-        print(f"Source: {settings.epg_source_url}\n")
+        logger.info(f"Time window: {time_from.date()} to {time_to.date()}")
+        logger.info(f"Source: {settings.epg_source_url}")
 
-        # Download XMLTV file
         temp_file = await _download_xmltv(settings.epg_source_url)
-
-        # Parse XMLTV
         channels, programs = await _parse_xmltv(temp_file, time_from, time_to)
-
-        # Store in database
         stats = await _store_data(channels, programs, time_from)
 
-        print(f"\n{'='*60}")
-        print("✓ EPG fetch completed successfully")
-        print(f"{'='*60}\n")
+        logger.info("="*60)
+        logger.info("EPG fetch completed successfully")
+        logger.info("="*60)
 
         return {
             "status": "success",
@@ -50,25 +51,38 @@ async def fetch_and_process() -> dict:
             **stats
         }
 
+    except httpx.HTTPError as e:
+        error_msg = f"HTTP error during EPG fetch: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {"error": error_msg}
     except Exception as e:
         error_msg = f"Error during EPG fetch: {str(e)}"
-        print(f"\n✗ {error_msg}\n")
+        logger.error(error_msg, exc_info=True)
         return {"error": error_msg}
+    finally:
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+                logger.debug(f"Cleaned up temporary file: {temp_file}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {temp_file}: {e}")
 
 
 async def _download_xmltv(url: str) -> Path:
     """Download XMLTV file from URL"""
-    print("Downloading XMLTV file...")
+    logger.info("Downloading XMLTV file...")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.get(url)
         response.raise_for_status()
 
         temp_file = Path("/tmp/epg.xml")
-        temp_file.write_bytes(response.content)
 
-        file_size = len(response.content) / (1024 * 1024)  # MB
-        print(f"✓ Downloaded {file_size:.2f} MB\n")
+        async with aiofiles.open(temp_file, 'wb') as f:
+            await f.write(response.content)
+
+        file_size = len(response.content) / (1024 * 1024)
+        logger.info(f"Downloaded {file_size:.2f} MB")
 
         return temp_file
 
@@ -79,15 +93,24 @@ async def _parse_xmltv(
     time_to: datetime
 ) -> tuple[list[tuple], list[dict]]:
     """Parse XMLTV file and return channels and programs"""
-    print("Parsing XMLTV file...")
+    logger.info("Parsing XMLTV file...")
 
-    channels, programs = parse_xmltv_file(str(file_path), time_from, time_to)
+    loop = asyncio.get_event_loop()
+    channels, programs = await loop.run_in_executor(
+        None,
+        parse_xmltv_file,
+        str(file_path),
+        time_from,
+        time_to
+    )
 
     if not channels:
         raise ValueError("No channels found in XMLTV")
 
     if not programs:
         raise ValueError("No programs found in XMLTV")
+
+    logger.info(f"Parsed {len(channels)} channels and {len(programs)} programs")
 
     return channels, programs
 
@@ -98,20 +121,14 @@ async def _store_data(
     time_from: datetime
 ) -> dict:
     """Store channels and programs in database"""
-    print(f"\n{'='*60}")
-    print("Storing data in database...")
-    print(f"{'='*60}\n")
+    logger.info("="*60)
+    logger.info("Storing data in database...")
+    logger.info("="*60)
 
     async with aiosqlite.connect(settings.database_path) as db:
-        # Delete old programs
         deleted_count = await _delete_old_programs(db, time_from)
-
-        # Store channels
         await _store_channels(db, channels)
-
-        # Store programs and get count
         inserted_count = await _store_programs(db, programs)
-
         await db.commit()
 
     return {
@@ -129,7 +146,7 @@ async def _delete_old_programs(db: aiosqlite.Connection, time_from: datetime) ->
         (time_from.isoformat(),)
     )
     deleted_count = cursor.rowcount
-    print(f"✓ Deleted {deleted_count} old programs")
+    logger.info(f"Deleted {deleted_count} old programs")
     return deleted_count
 
 
@@ -139,17 +156,15 @@ async def _store_channels(db: aiosqlite.Connection, channels: list[tuple]) -> No
         "INSERT OR REPLACE INTO channels (xmltv_id, display_name, icon_url) VALUES (?, ?, ?)",
         channels
     )
-    print(f"✓ Stored {len(channels)} channels")
+    logger.info(f"Stored {len(channels)} channels")
 
 
 async def _store_programs(db: aiosqlite.Connection, programs: list[dict]) -> int:
     """Store programs in database and return count of inserted programs"""
-    # Get count before insert
     cursor = await db.execute("SELECT COUNT(*) FROM programs")
     result = await cursor.fetchone()
     before_count = result[0] if result else 0
 
-    # Prepare program tuples
     program_tuples = [
         (
             p['id'],
@@ -162,7 +177,6 @@ async def _store_programs(db: aiosqlite.Connection, programs: list[dict]) -> int
         for p in programs
     ]
 
-    # Insert programs
     await db.executemany(
         """INSERT OR IGNORE INTO programs
            (id, xmltv_channel_id, start_time, stop_time, title, description)
@@ -170,7 +184,6 @@ async def _store_programs(db: aiosqlite.Connection, programs: list[dict]) -> int
         program_tuples
     )
 
-    # Get count after insert
     cursor = await db.execute("SELECT COUNT(*) FROM programs")
     result = await cursor.fetchone()
     after_count = result[0] if result else 0
@@ -178,6 +191,6 @@ async def _store_programs(db: aiosqlite.Connection, programs: list[dict]) -> int
     inserted_count = after_count - before_count
     skipped_count = len(programs) - inserted_count
 
-    print(f"✓ Stored {inserted_count} new programs (skipped {skipped_count} duplicates)")
+    logger.info(f"Stored {inserted_count} new programs (skipped {skipped_count} duplicates)")
 
     return inserted_count

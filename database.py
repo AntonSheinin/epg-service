@@ -1,28 +1,27 @@
 import aiosqlite
-import os
+import logging
 from typing import AsyncGenerator
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.config import settings
 
-DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/epg.db")
+logger = logging.getLogger("epg_service.database")
 
 
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     """Database dependency for FastAPI"""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(settings.database_path) as db:
         db.row_factory = aiosqlite.Row
         yield db
 
 
 async def init_db() -> None:
     """Initialize database schema"""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Enable WAL mode for better concurrency
+    logger.info(f"Initializing database at {settings.database_path}")
+
+    async with aiosqlite.connect(settings.database_path) as db:
         await db.execute("PRAGMA journal_mode = WAL")
         await db.execute("PRAGMA cache_size = -64000")
 
-        # Create channels table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS channels (
                 xmltv_id TEXT PRIMARY KEY,
@@ -32,7 +31,6 @@ async def init_db() -> None:
             )
         """)
 
-        # Create programs table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS programs (
                 id TEXT PRIMARY KEY,
@@ -46,11 +44,10 @@ async def init_db() -> None:
             )
         """)
 
-        # Create index for fast queries
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_programs_channel_time
             ON programs(xmltv_channel_id, start_time)
         """)
 
         await db.commit()
-        print("✓ Database initialized")
+        logger.info("Database initialized successfully")
