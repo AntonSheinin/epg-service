@@ -1,28 +1,36 @@
-from fastapi import FastAPI, Depends
+from contextlib import asynccontextmanager
+from typing import Annotated
+
+from fastapi import FastAPI, Depends, Query
 from fastapi.responses import JSONResponse
 import aiosqlite
-import os
-from dotenv import load_dotenv
-from database import init_db, get_db
-from epg_fetcher import fetch_and_process
 
-load_dotenv()
-
-DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/epg.db")
-
-app = FastAPI(title="EPG Service", version="0.1.0")
+from app.config import settings
+from app.database import init_db, get_db
+from app.epg_fetcher import fetch_and_process
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize database on startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    # Startup
     await init_db()
     print("✓ EPG Service started")
+    yield
+    # Shutdown (if needed)
+    print("✓ EPG Service shutting down")
+
+
+app = FastAPI(
+    title="EPG Service",
+    version="0.1.0",
+    lifespan=lifespan
+)
 
 
 @app.get("/")
-async def root():
-    """Root endpoint"""
+async def root() -> dict:
+    """Root endpoint with service information"""
     return {
         "service": "EPG Service",
         "version": "0.1.0",
@@ -35,7 +43,7 @@ async def root():
 
 
 @app.post("/fetch")
-async def trigger_fetch():
+async def trigger_fetch() -> dict | JSONResponse:
     """
     Manually trigger EPG fetch from source
 
@@ -50,7 +58,9 @@ async def trigger_fetch():
 
 
 @app.get("/channels")
-async def get_channels(db: aiosqlite.Connection = Depends(get_db)):
+async def get_channels(
+    db: Annotated[aiosqlite.Connection, Depends(get_db)]
+) -> dict:
     """Get all channels"""
     cursor = await db.execute(
         "SELECT xmltv_id, display_name, icon_url FROM channels ORDER BY display_name"
@@ -65,16 +75,19 @@ async def get_channels(db: aiosqlite.Connection = Depends(get_db)):
 
 @app.get("/programs")
 async def get_programs(
-    start_from: str,
-    start_to: str,
-    db: aiosqlite.Connection = Depends(get_db)
-):
+    start_from: Annotated[str, Query(description="ISO8601 datetime, e.g. 2025-10-09T00:00:00Z")],
+    start_to: Annotated[str, Query(description="ISO8601 datetime, e.g. 2025-10-10T00:00:00Z")],
+    db: Annotated[aiosqlite.Connection, Depends(get_db)]
+) -> dict:
     """
     Get all programs in time range
 
     Args:
         start_from: ISO8601 datetime (e.g. 2025-10-09T00:00:00Z)
         start_to: ISO8601 datetime (e.g. 2025-10-10T00:00:00Z)
+
+    Returns:
+        Dictionary with count and list of programs
     """
     query = """
         SELECT
