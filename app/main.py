@@ -2,8 +2,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 import logging
 
-from fastapi import FastAPI, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Depends, Query, HTTPException
 import aiosqlite
 
 from app.config import settings
@@ -79,7 +78,7 @@ async def health_check() -> dict:
 
 
 @app.post("/fetch")
-async def trigger_fetch() -> dict | JSONResponse:
+async def trigger_fetch() -> dict:
     """
     Manually trigger EPG fetch from source
 
@@ -89,7 +88,7 @@ async def trigger_fetch() -> dict | JSONResponse:
     result = await fetch_and_process()
 
     if "error" in result:
-        return JSONResponse(status_code=500, content=result)
+        raise HTTPException(status_code=500, detail=result["error"])
 
     return result
 

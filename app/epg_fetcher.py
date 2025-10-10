@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import logging
 import asyncio
+import tempfile
 
 import aiosqlite
 import httpx
@@ -76,7 +77,9 @@ async def _download_xmltv(url: str) -> Path:
         response = await client.get(url)
         response.raise_for_status()
 
-        temp_file = Path("/tmp/epg.xml")
+        # Use system temp directory (cross-platform)
+        temp_dir = Path(tempfile.gettempdir())
+        temp_file = temp_dir / "epg.xml"
 
         async with aiofiles.open(temp_file, 'wb') as f:
             await f.write(response.content)
