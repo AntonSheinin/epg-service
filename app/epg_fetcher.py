@@ -16,31 +16,125 @@ logger = logging.getLogger("epg_service.fetcher")
 
 async def fetch_and_process() -> dict:
     """
-    Fetch EPG from source, parse and store in database
+    Fetch EPG from all sources, parse and store in database
 
     Returns:
         Dictionary with fetch statistics or error
     """
     logger.info("="*60)
     logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
+    logger.info(f"Processing {len(settings.epg_sources)} source(s)")
     logger.info("="*60)
 
-    if not settings.epg_source_url:
-        logger.error("EPG_SOURCE_URL not configured")
-        return {"error": "EPG_SOURCE_URL not configured"}
+    if not settings.epg_sources:
+        logger.error("EPG_SOURCES not configured")
+        return {"error": "EPG_SOURCES not configured"}
 
-    temp_file = None
+    now = datetime.now(timezone.utc)
+    time_from = now - timedelta(days=14)
+    time_to = now + timedelta(days=7)
+
+    logger.info(f"Time window: {time_from.date()} to {time_to.date()}")
+
     try:
-        now = datetime.now(timezone.utc)
-        time_from = now - timedelta(days=14)
-        time_to = now + timedelta(days=7)
+        # Delete old programs first (before fetching new data)
+        async with aiosqlite.connect(settings.database_path) as db:
+            deleted_count = await _delete_old_programs(db, time_from)
+            await db.commit()
 
-        logger.info(f"Time window: {time_from.date()} to {time_to.date()}")
-        logger.info(f"Source: {settings.epg_source_url}")
+        all_channels: dict[str, tuple[str, str, str | None]] = {}  # xmltv_id -> (xmltv_id, display_name, icon_url)
+        all_programs: dict[str, dict] = {}  # program_key -> program_dict
 
-        temp_file = await _download_xmltv(settings.epg_source_url)
-        channels, programs = await _parse_xmltv(temp_file, time_from, time_to)
-        stats = await _store_data(channels, programs, time_from)
+        source_stats = []
+
+        # Process each source sequentially
+        for idx, source_url in enumerate(settings.epg_sources, 1):
+            logger.info("="*60)
+            logger.info(f"Processing source {idx}/{len(settings.epg_sources)}")
+            logger.info(f"URL: {source_url}")
+            logger.info("="*60)
+
+            temp_file = None
+            try:
+                temp_file = await _download_xmltv(source_url, idx)
+                channels, programs = await _parse_xmltv(temp_file, time_from, time_to)
+
+                # Merge channels (first source wins for duplicates)
+                new_channels = 0
+                for channel in channels:
+                    xmltv_id = channel[0]
+                    if xmltv_id not in all_channels:
+                        all_channels[xmltv_id] = channel
+                        new_channels += 1
+                    else:
+                        logger.debug(f"Skipping duplicate channel: {xmltv_id} (already exists from previous source)")
+
+                # Merge programs (first source wins for duplicates)
+                new_programs = 0
+                for program in programs:
+                    program_key = f"{program['xmltv_channel_id']}_{program['start_time']}_{program['title']}"
+                    if program_key not in all_programs:
+                        all_programs[program_key] = program
+                        new_programs += 1
+                    else:
+                        logger.debug(f"Skipping duplicate program: {program['title']} on {program['xmltv_channel_id']}")
+
+                source_stats.append({
+                    "source_index": idx,
+                    "source_url": source_url,
+                    "status": "success",
+                    "channels_parsed": len(channels),
+                    "channels_new": new_channels,
+                    "programs_parsed": len(programs),
+                    "programs_new": new_programs
+                })
+
+                logger.info(f"Source {idx}: {new_channels} new channels, {new_programs} new programs")
+
+            except Exception as e:
+                error_msg = f"Error processing source {idx}: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                source_stats.append({
+                    "source_index": idx,
+                    "source_url": source_url,
+                    "status": "failed",
+                    "error": str(e)
+                })
+                # Continue with next source
+                continue
+            finally:
+                if temp_file and temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                        logger.debug(f"Cleaned up temporary file for source {idx}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete temporary file for source {idx}: {e}")
+
+        # Store merged data
+        if not all_channels:
+            logger.error("No channels found across all sources")
+            return {
+                "error": "No channels found across all sources",
+                "sources": source_stats
+            }
+
+        if not all_programs:
+            logger.error("No programs found across all sources")
+            return {
+                "error": "No programs found across all sources",
+                "sources": source_stats
+            }
+
+        logger.info("="*60)
+        logger.info("Storing merged data in database...")
+        logger.info(f"Total unique channels: {len(all_channels)}")
+        logger.info(f"Total unique programs: {len(all_programs)}")
+        logger.info("="*60)
+
+        async with aiosqlite.connect(settings.database_path) as db:
+            await _store_channels(db, list(all_channels.values()))
+            inserted_count = await _store_programs(db, list(all_programs.values()))
+            await db.commit()
 
         logger.info("="*60)
         logger.info("EPG fetch completed successfully")
@@ -49,29 +143,25 @@ async def fetch_and_process() -> dict:
         return {
             "status": "success",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            **stats
+            "sources_processed": len(settings.epg_sources),
+            "sources_succeeded": sum(1 for s in source_stats if s["status"] == "success"),
+            "sources_failed": sum(1 for s in source_stats if s["status"] == "failed"),
+            "channels": len(all_channels),
+            "programs_parsed": len(all_programs),
+            "programs_inserted": inserted_count,
+            "programs_deleted": deleted_count,
+            "source_details": source_stats
         }
 
-    except httpx.HTTPError as e:
-        error_msg = f"HTTP error during EPG fetch: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return {"error": error_msg}
     except Exception as e:
         error_msg = f"Error during EPG fetch: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return {"error": error_msg}
-    finally:
-        if temp_file and temp_file.exists():
-            try:
-                temp_file.unlink()
-                logger.debug(f"Cleaned up temporary file: {temp_file}")
-            except Exception as e:
-                logger.warning(f"Failed to delete temporary file {temp_file}: {e}")
 
 
-async def _download_xmltv(url: str) -> Path:
+async def _download_xmltv(url: str, source_index: int) -> Path:
     """Download XMLTV file from URL"""
-    logger.info("Downloading XMLTV file...")
+    logger.info(f"Downloading XMLTV file...")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.get(url)
@@ -79,7 +169,7 @@ async def _download_xmltv(url: str) -> Path:
 
         # Use system temp directory (cross-platform)
         temp_dir = Path(tempfile.gettempdir())
-        temp_file = temp_dir / "epg.xml"
+        temp_file = temp_dir / f"epg_source_{source_index}.xml"
 
         async with aiofiles.open(temp_file, 'wb') as f:
             await f.write(response.content)
@@ -116,30 +206,6 @@ async def _parse_xmltv(
     logger.info(f"Parsed {len(channels)} channels and {len(programs)} programs")
 
     return channels, programs
-
-
-async def _store_data(
-    channels: list[tuple],
-    programs: list[dict],
-    time_from: datetime
-) -> dict:
-    """Store channels and programs in database"""
-    logger.info("="*60)
-    logger.info("Storing data in database...")
-    logger.info("="*60)
-
-    async with aiosqlite.connect(settings.database_path) as db:
-        deleted_count = await _delete_old_programs(db, time_from)
-        await _store_channels(db, channels)
-        inserted_count = await _store_programs(db, programs)
-        await db.commit()
-
-    return {
-        "channels": len(channels),
-        "programs_parsed": len(programs),
-        "programs_inserted": inserted_count,
-        "programs_deleted": deleted_count
-    }
 
 
 async def _delete_old_programs(db: aiosqlite.Connection, time_from: datetime) -> int:

@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -5,7 +6,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     database_path: str = "./data/epg.db"
-    epg_source_url: str | None = None
+    epg_sources: list[str] = []
     log_level: str = "INFO"
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
 
@@ -15,6 +16,14 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore"
     )
+
+    @field_validator('epg_sources', mode='before')
+    @classmethod
+    def parse_epg_sources(cls, v):
+        """Parse comma-separated URLs"""
+        if isinstance(v, str):
+            return [url.strip() for url in v.split(',') if url.strip()]
+        return v
 
 
 settings = Settings()
