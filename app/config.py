@@ -1,14 +1,16 @@
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import logging
 
 
-class Settings(BaseSettings):
+class CustomSettings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     database_path: str = "./data/epg.db"
-    epg_sources: list[str] = []
+    epg_sources: list[str] | None = None
     log_level: str = "INFO"
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
+    max_epg_depth: int = 14  # Days to keep past programs (archive)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -20,10 +22,25 @@ class Settings(BaseSettings):
     @field_validator('epg_sources', mode='before')
     @classmethod
     def parse_epg_sources(cls, v):
-        """Parse comma-separated URLs"""
+        """Parse comma-separated URLs or list"""
+        if v is None:
+            return []
         if isinstance(v, str):
+            if not v.strip():
+                return []
             return [url.strip() for url in v.split(',') if url.strip()]
-        return v
+        if isinstance(v, list):
+            return v
+        return []
 
 
-settings = Settings()
+settings = CustomSettings()
+
+
+def setup_logging() -> None:
+    """Configure application logging"""
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper()),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )

@@ -23,31 +23,42 @@ async def fetch_and_process() -> dict:
     """
     logger.info("="*60)
     logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
-    logger.info(f"Processing {len(settings.epg_sources)} source(s)")
-    logger.info("="*60)
 
     if not settings.epg_sources:
         logger.error("EPG_SOURCES not configured")
         return {"error": "EPG_SOURCES not configured"}
 
-    now = datetime.now(timezone.utc)
-    time_from = now - timedelta(days=14)
-    time_to = now + timedelta(days=7)
+    logger.info(f"Processing {len(settings.epg_sources)} source(s)")
+    logger.info("="*60)
 
-    logger.info(f"Time window: {time_from.date()} to {time_to.date()}")
+    now = datetime.now(timezone.utc)
+
+    # Archive boundary: keep programs from MAX_EPG_DEPTH days ago
+    archive_boundary = now - timedelta(days=settings.max_epg_depth)
+
+    # Fetch boundary: only accept programs from start of today onwards
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # No upper limit - accept all future programs from sources
+    time_to = now + timedelta(days=365)
+
+    logger.info(f"Archive boundary: {archive_boundary.date()} (keeping programs from this date)")
+    logger.info(f"Fetch boundary: {today_start.date()} 00:00 UTC (only accepting programs from today)")
+    logger.info(f"Max EPG depth: {settings.max_epg_depth} days")
 
     try:
-        # Delete old programs first (before fetching new data)
+        # Delete old programs first (older than archive boundary)
         async with aiosqlite.connect(settings.database_path) as db:
-            deleted_count = await _delete_old_programs(db, time_from)
+            deleted_count = await _delete_old_programs(db, archive_boundary)
             await db.commit()
 
-        all_channels: dict[str, tuple[str, str, str | None]] = {}  # xmltv_id -> (xmltv_id, display_name, icon_url)
-        all_programs: dict[str, dict] = {}  # program_key -> program_dict
+        # ... rest of the function remains the same, but pass today_start instead of time_from
+
+        all_channels: dict[str, tuple[str, str, str | None]] = {}
+        all_programs: dict[str, dict] = {}
 
         source_stats = []
 
-        # Process each source sequentially
         for idx, source_url in enumerate(settings.epg_sources, 1):
             logger.info("="*60)
             logger.info(f"Processing source {idx}/{len(settings.epg_sources)}")
@@ -57,7 +68,7 @@ async def fetch_and_process() -> dict:
             temp_file = None
             try:
                 temp_file = await _download_xmltv(source_url, idx)
-                channels, programs = await _parse_xmltv(temp_file, time_from, time_to)
+                channels, programs = await _parse_xmltv(temp_file, today_start, time_to)
 
                 # Merge channels (first source wins for duplicates)
                 new_channels = 0
@@ -100,7 +111,6 @@ async def fetch_and_process() -> dict:
                     "status": "failed",
                     "error": str(e)
                 })
-                # Continue with next source
                 continue
             finally:
                 if temp_file and temp_file.exists():
