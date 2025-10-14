@@ -14,7 +14,7 @@ from app.routers import main_router
 
 
 setup_logging()
-logger = logging.getLogger("epg_service.main")
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,6 +48,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     try:
         body = await request.body()
         logger.error(f"Request body: {body.decode('utf-8')}")
+
     except:
         logger.error("Could not read request body")
 
@@ -58,7 +59,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "type": error.get("type"),
             "loc": error.get("loc"),
             "msg": error.get("msg"),
-            "input": str(error.get("input", ""))[:100]  # Limit input display
+            "input": str(error.get("input", ""))[:100]
         }
         errors.append(error_dict)
 

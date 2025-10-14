@@ -13,6 +13,9 @@ from app.xmltv_parser import parse_xmltv_file
 
 logger = logging.getLogger("epg_service.fetcher")
 
+# Global lock to prevent concurrent fetch operations
+_fetch_lock = asyncio.Lock()
+
 
 async def fetch_and_process() -> dict:
     """
@@ -21,12 +24,32 @@ async def fetch_and_process() -> dict:
     Returns:
         Dictionary with fetch statistics or error
     """
-    logger.info("="*60)
-    logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
+    # Try to acquire lock without blocking
+    if _fetch_lock.locked():
+        logger.warning("EPG fetch already in progress, skipping this request")
+        return {
+            "status": "skipped",
+            "message": "EPG fetch operation already in progress"
+        }
 
-    if not settings.epg_sources:
-        logger.error("EPG_SOURCES not configured")
-        return {"error": "EPG_SOURCES not configured"}
+    async with _fetch_lock:
+        logger.info("="*60)
+        logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
+
+        if not settings.epg_sources:
+            logger.error("EPG_SOURCES not configured")
+            return {"error": "EPG_SOURCES not configured"}
+
+        return await _do_fetch_and_process()
+
+
+async def _do_fetch_and_process() -> dict:
+    """
+    Internal function that performs the actual fetch and process logic
+
+    Returns:
+        Dictionary with fetch statistics or error
+    """
 
     logger.info(f"Processing {len(settings.epg_sources)} source(s)")
     logger.info("="*60)

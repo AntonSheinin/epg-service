@@ -1,9 +1,14 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import uuid4
+import logging
 
 from lxml import etree # type: ignore
 
+from app.config import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 def parse_xmltv_file(
     file_path: str,
@@ -34,8 +39,8 @@ def parse_xmltv_file(
     channels = _parse_channels(root)
     programs = _parse_programs(root, time_from, time_to)
 
-    print(f"  Parsed {len(channels)} channels")
-    print(f"  Parsed {len(programs)} programs")
+    logger.info(f"  Parsed {len(channels)} channels")
+    logger.info(f"  Parsed {len(programs)} programs")
 
     return channels, programs
 
@@ -61,11 +66,7 @@ def _parse_channels(root: etree._Element) -> list[tuple[str, str, Optional[str]]
     return channels
 
 
-def _parse_programs(
-    root: etree._Element,
-    time_from: Optional[datetime],
-    time_to: Optional[datetime]
-) -> list[dict[str, Optional[str]]]:
+def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> list[dict[str, Optional[str]]]:
     """Extract programs from XMLTV root element"""
     programs = []
 
@@ -77,11 +78,7 @@ def _parse_programs(
     return programs
 
 
-def _parse_single_program(
-    programme: etree._Element,
-    time_from: Optional[datetime],
-    time_to: Optional[datetime]
-) -> Optional[dict[str, Optional[str]]]:
+def _parse_single_program(programme: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> Optional[dict[str, Optional[str]]]:
     """Parse single programme element"""
     # Required fields
     channel_id = programme.get('channel')
@@ -147,11 +144,7 @@ def _parse_xmltv_time(time_str: str) -> str:
     return dt_utc.replace(tzinfo=timezone.utc).isoformat()
 
 
-def _is_in_time_window(
-    time_str: str,
-    time_from: Optional[datetime],
-    time_to: Optional[datetime]
-) -> bool:
+def _is_in_time_window(time_str: str, time_from: Optional[datetime], time_to: Optional[datetime]) -> bool:
     """Check if time is within the specified window"""
     if not time_from and not time_to:
         return True
@@ -167,11 +160,7 @@ def _is_in_time_window(
     return True
 
 
-def _get_text(
-    element: etree._Element,
-    tag: str,
-    default: Optional[str] = None
-) -> Optional[str]:
+def _get_text(element: etree._Element, tag: str, default: Optional[str] = None) -> Optional[str]:
     """Safely extract text from XML element"""
     child = element.find(tag)
     if child is None or not child.text:

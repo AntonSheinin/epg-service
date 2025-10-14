@@ -2,9 +2,10 @@ import aiosqlite
 import logging
 from typing import AsyncGenerator
 
-from app.config import settings
+from app.config import settings, setup_logging
 
-logger = logging.getLogger("epg_service.database")
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:

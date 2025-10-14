@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import setup_logging
 from app.database import get_db
 from app.scheduler import epg_scheduler
-from app.config import setup_logging
 import logging
 from app.epg_fetcher import fetch_and_process
 from app.schemas import EPGRequest, EPGResponse, ProgramResponse
@@ -69,7 +68,7 @@ async def health_check() -> dict:
     }
 
 
-@main_router.get("/fetch")
+@main_router.post("/fetch")
 async def trigger_fetch() -> dict:
     """
     Manually trigger EPG fetch from source
