@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import setup_logging
 from app.database import init_db
-from app.scheduler import epg_scheduler
+from app.services.scheduler_service import epg_scheduler
 
 from app.routers import main_router
 

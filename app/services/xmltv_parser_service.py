@@ -5,16 +5,10 @@ import logging
 
 from lxml import etree # type: ignore
 
-from app.config import setup_logging
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
-def parse_xmltv_file(
-    file_path: str,
-    time_from: Optional[datetime] = None,
-    time_to: Optional[datetime] = None
-) -> tuple[list[tuple[str, str, Optional[str]]], list[dict[str, Optional[str]]]]:
+def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list, list]:
     """
     Parse XMLTV file and return channels and programs
 

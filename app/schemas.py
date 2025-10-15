@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
-from datetime import timezone
-from zoneinfo import ZoneInfo, available_timezones
+from zoneinfo import ZoneInfo
 
 
 class ChannelEPGRequest(BaseModel):

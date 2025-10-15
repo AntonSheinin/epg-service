@@ -4,10 +4,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
-from app.epg_fetcher import fetch_and_process
+from app.services.epg_fetch_service import fetch_and_process
+
 
 logger = logging.getLogger("epg_service.scheduler")
-
 
 class EPGScheduler:
     """Scheduler for automatic EPG fetching"""

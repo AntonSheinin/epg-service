@@ -2,9 +2,8 @@ import aiosqlite
 import logging
 from typing import AsyncGenerator
 
-from app.config import settings, setup_logging
+from app.config import settings
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
 
