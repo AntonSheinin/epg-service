@@ -70,7 +70,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ### Docker
 
 ```bash
-docker-compose up --build
+docker-compose up --build or
+docker-compose up -d --build
 ```
 
 Server will be available at `http://localhost:8000`
