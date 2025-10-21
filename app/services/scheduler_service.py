@@ -17,24 +17,24 @@ class EPGScheduler:
         self._setup_jobs()
 
     def _setup_jobs(self) -> None:
-        """Setup scheduled jobs"""
-        try:
-            trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
+        """
+        Setup scheduled jobs
 
-            self.scheduler.add_job(
-                self._fetch_job,
-                trigger=trigger,
-                id='epg_fetch',
-                name='EPG Fetch Job',
-                replace_existing=True,
-                misfire_grace_time=3600
-            )
+        Raises:
+            ValueError: If cron expression is invalid
+        """
+        trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
 
-            logger.info(f"Scheduled EPG fetch with cron: {settings.epg_fetch_cron}")
+        self.scheduler.add_job(
+            self._fetch_job,
+            trigger=trigger,
+            id='epg_fetch',
+            name='EPG Fetch Job',
+            replace_existing=True,
+            misfire_grace_time=3600
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to setup scheduler: {e}", exc_info=True)
-            raise
+        logger.info(f"Scheduled EPG fetch with cron: {settings.epg_fetch_cron}")
 
     async def _fetch_job(self) -> None:
         """Job that runs the EPG fetch"""

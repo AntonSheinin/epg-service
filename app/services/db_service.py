@@ -13,7 +13,6 @@ from app.utils.data_merging import ChannelTuple, ProgramDict
 
 logger = logging.getLogger(__name__)
 
-
 async def delete_old_programs(db: aiosqlite.Connection, cutoff_time: datetime) -> int:
     """
     Delete programs older than specified cutoff time
@@ -25,10 +24,7 @@ async def delete_old_programs(db: aiosqlite.Connection, cutoff_time: datetime) -
     Returns:
         Number of deleted programs
     """
-    cursor = await db.execute(
-        "DELETE FROM programs WHERE start_time < ?",
-        (cutoff_time.isoformat(),)
-    )
+    cursor = await db.execute("DELETE FROM programs WHERE start_time < ?",(cutoff_time.isoformat(),))
     deleted_count = cursor.rowcount
     logger.info(f"Deleted {deleted_count} old programs (before {cutoff_time.date()})")
     return deleted_count
@@ -42,8 +38,7 @@ async def store_channels(db: aiosqlite.Connection, channels: list[ChannelTuple])
         db: Database connection
         channels: List of channel tuples (xmltv_id, display_name, icon_url)
     """
-    await db.executemany(
-        "INSERT OR REPLACE INTO channels (xmltv_id, display_name, icon_url) VALUES (?, ?, ?)",
+    await db.executemany("INSERT OR REPLACE INTO channels (xmltv_id, display_name, icon_url) VALUES (?, ?, ?)",
         channels
     )
     logger.info(f"Stored {len(channels)} channels")

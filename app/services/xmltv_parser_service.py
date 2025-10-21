@@ -21,13 +21,13 @@ def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_
         Tuple of (channels, programs)
         - channels: List of (xmltv_id, display_name, icon_url)
         - programs: List of dicts with program data
-    """
-    try:
-        tree = etree.parse(file_path)
-    except Exception as e:
-        logger.error(f"Error parsing XML file: {e}")
-        return [], []
 
+    Raises:
+        etree.XMLSyntaxError: If XML is malformed
+        FileNotFoundError: If file doesn't exist
+        OSError: If file can't be read
+    """
+    tree = etree.parse(file_path)
     root = tree.getroot()
 
     channels = _parse_channels(root)
@@ -84,11 +84,11 @@ def _parse_single_program(programme: etree._Element, time_from: Optional[datetim
     if not all([channel_id, start_str, stop_str, title]):
         return None
 
-    # Parse times
+    # Parse times (skip invalid formats)
     try:
         start_time = _parse_xmltv_time(start_str)
         stop_time = _parse_xmltv_time(stop_str)
-    except Exception:
+    except (ValueError, IndexError, KeyError):
         return None
 
     # Filter by time window

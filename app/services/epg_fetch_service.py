@@ -20,7 +20,6 @@ logger = logging.getLogger("epg_service.fetcher")
 # Global lock to prevent concurrent fetch operations
 _fetch_lock = asyncio.Lock()
 
-
 async def fetch_and_process() -> dict:
     """
     Main entry point for EPG fetching with concurrency protection
@@ -149,9 +148,10 @@ async def _process_all_sources(boundaries: dict) -> tuple[dict[str, ChannelTuple
     all_channels: dict[str, ChannelTuple] = {}
     all_programs: dict[str, ProgramDict] = {}
     source_stats = []
+    epg_sources = settings.epg_sources or []
 
-    for idx, source_url in enumerate(settings.epg_sources, 1):
-        _log_source_header(idx, len(settings.epg_sources), source_url)
+    for idx, source_url in enumerate(epg_sources, 1):
+        _log_source_header(idx, len(epg_sources), source_url)
 
         try:
             channels, programs = await _process_single_source(
@@ -377,10 +377,11 @@ def _create_success_response(
     deleted_count: int
 ) -> dict:
     """Create success response with statistics"""
+    epg_sources = settings.epg_sources or []
     return {
         "status": "success",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "sources_processed": len(settings.epg_sources),
+        "sources_processed": len(epg_sources),
         "sources_succeeded": sum(1 for s in source_stats if s["status"] == "success"),
         "sources_failed": sum(1 for s in source_stats if s["status"] == "failed"),
         "channels": len(all_channels),

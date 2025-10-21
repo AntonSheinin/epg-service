@@ -58,12 +58,13 @@ def cleanup_temp_file(file_path: Path) -> bool:
     Returns:
         True if deleted successfully, False otherwise
     """
-    if file_path and file_path.exists():
-        try:
-            file_path.unlink()
-            logger.debug(f"Cleaned up temporary file: {file_path}")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to delete temporary file {file_path}: {e}")
-            return False
-    return False
+    if not file_path or not file_path.exists():
+        return False
+
+    try:
+        file_path.unlink()
+        logger.debug(f"Cleaned up temporary file: {file_path}")
+        return True
+    except (OSError, PermissionError) as e:
+        logger.warning(f"Failed to delete temporary file {file_path}: {e}")
+        return False
