@@ -311,7 +311,14 @@ async def _store_results(
 # Helper functions for logging and response creation
 
 def _log_source_header(idx: int, total: int, url: str) -> None:
-    """Log header for source processing"""
+    """
+    Log header for source processing
+
+    Args:
+        idx: Current source index (1-based)
+        total: Total number of sources
+        url: Source URL being processed
+    """
     logger.info("="*60)
     logger.info(f"Processing source {idx}/{total}")
     logger.info(f"URL: {url}")
@@ -326,7 +333,20 @@ def _create_source_stat_success(
     programs_parsed: int,
     programs_new: int
 ) -> dict:
-    """Create success statistics for a source"""
+    """
+    Create success statistics for a source
+
+    Args:
+        idx: Source index
+        url: Source URL
+        channels_parsed: Total channels found in this source
+        channels_new: New channels added from this source
+        programs_parsed: Total programs found in this source
+        programs_new: New programs added from this source
+
+    Returns:
+        Dictionary with success statistics
+    """
     return {
         "source_index": idx,
         "source_url": url,
@@ -339,7 +359,17 @@ def _create_source_stat_success(
 
 
 def _create_source_stat_failure(idx: int, url: str, error: str) -> dict:
-    """Create failure statistics for a source"""
+    """
+    Create failure statistics for a source
+
+    Args:
+        idx: Source index
+        url: Source URL
+        error: Error message
+
+    Returns:
+        Dictionary with failure statistics
+    """
     return {
         "source_index": idx,
         "source_url": url,
@@ -353,7 +383,17 @@ def _create_error_response(
     all_programs: dict,  # noqa: ARG001
     source_stats: list[dict]
 ) -> dict:
-    """Create error response when no data found"""
+    """
+    Create error response when no data found
+
+    Args:
+        all_channels: Merged channels dictionary
+        all_programs: Merged programs dictionary (unused, kept for consistency)
+        source_stats: Statistics from all sources
+
+    Returns:
+        Dictionary with error message and source details
+    """
     if not all_channels:
         logger.error("No channels found across all sources")
         return {
@@ -376,7 +416,19 @@ def _create_success_response(
     inserted_count: int,
     deleted_count: int
 ) -> dict:
-    """Create success response with statistics"""
+    """
+    Create success response with statistics
+
+    Args:
+        all_channels: Merged channels dictionary
+        all_programs: Merged programs dictionary
+        source_stats: Statistics from all sources
+        inserted_count: Number of programs inserted into database
+        deleted_count: Number of old programs deleted
+
+    Returns:
+        Dictionary with success status and detailed statistics
+    """
     epg_sources = settings.epg_sources or []
     return {
         "status": "success",
