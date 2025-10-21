@@ -4,13 +4,12 @@ EPG Query Service
 Business logic for querying and retrieving EPG data from database.
 This service handles all read operations for channels and programs.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import aiosqlite
 import logging
 
 from app.schemas import EPGRequest, EPGResponse, ProgramResponse
-from app.utils.timezone import convert_to_timezone
-
+from app.utils.timezone import convert_to_timezone, calculate_time_window
 
 logger = logging.getLogger(__name__)
 
@@ -89,78 +88,44 @@ async def get_epg_data(
     """
     Get EPG data for multiple channels with individual time windows
 
-    This is the main business logic for retrieving EPG data based on
-    channel requests, update mode, and timezone preferences.
-
     Args:
         db: Database connection
-        request: EPG request with channels, update mode, and timezone
+        request: EPG request with channels, update mode, timezone, and optional from_date/to_date
 
     Returns:
         EPG data grouped by channel xmltv_id with timestamps in requested timezone
     """
-    logger.info(f"Received EPG request body: {request.model_dump_json()}")
-    logger.info(f"EPG request: {len(request.channels)} channels, mode={request.update}, timezone={request.timezone}")
+    logger.info(f"Received EPG request: {len(request.channels)} channels, mode={request.update}, timezone={request.timezone}")
+    if request.from_date or request.to_date:
+        logger.info(f"Date range: from_date={request.from_date}, to_date={request.to_date}")
 
     now = datetime.now(timezone.utc)
-    future_limit = now + timedelta(days=7)
-
     epg_data: dict[str, list[ProgramResponse]] = {}
     channels_found_set: set[str] = set()
     total_programs = 0
 
-    # Process each channel request (may have duplicates)
+    # Process each channel request
     for channel in request.channels:
-        # Calculate time window based on update mode
-        if request.update == "force":
-            start_time = now - timedelta(days=channel.epg_depth)
-        else:  # delta
-            start_time = now
+        start_time, end_time = calculate_time_window(request, channel.epg_depth, now)
 
-        end_time = future_limit
+        logger.debug(f"Fetching EPG for {channel.xmltv_id}: {start_time.isoformat()} to {end_time.isoformat()}")
 
-        logger.debug(
-            f"Fetching EPG for {channel.xmltv_id}: "
-            f"{start_time.isoformat()} to {end_time.isoformat()}"
-        )
+        programs = await _query_programs_for_channel(db, channel.xmltv_id, start_time, end_time)
 
-        # Query programs for this channel (stored in UTC)
-        programs_for_channel = await _query_programs_for_channel(
-            db,
-            channel.xmltv_id,
-            start_time,
-            end_time
-        )
-
-        if programs_for_channel:
+        if programs:
             channels_found_set.add(channel.xmltv_id)
-            total_programs += _merge_channel_programs(
-                epg_data,
-                channel.xmltv_id,
-                programs_for_channel,
-                request.timezone
-            )
-        else:
-            # Include channel in response even if no programs found
-            if channel.xmltv_id not in epg_data:
-                epg_data[channel.xmltv_id] = []
+            total_programs += _merge_channel_programs(epg_data, channel.xmltv_id, programs, request.timezone)
+        elif channel.xmltv_id not in epg_data:
+            epg_data[channel.xmltv_id] = []
 
-    channels_found = len(channels_found_set)
-
-    logger.info(
-        f"EPG response: {channels_found} unique channels found, "
-        f"{total_programs} total programs, timezone={request.timezone}"
-    )
-
-    # Convert response timestamp to requested timezone
-    response_timestamp = convert_to_timezone(now.isoformat(), request.timezone)
+    logger.info(f"EPG response: {len(channels_found_set)} channels found, {total_programs} programs, timezone={request.timezone}")
 
     return EPGResponse(
         update_mode=request.update,
-        timestamp=response_timestamp,
+        timestamp=convert_to_timezone(now.isoformat(), request.timezone),
         timezone=request.timezone,
         channels_requested=len(request.channels),
-        channels_found=channels_found,
+        channels_found=len(channels_found_set),
         total_programs=total_programs,
         epg=epg_data
     )
@@ -202,7 +167,7 @@ async def _query_programs_for_channel(
         query,
         (channel_id, start_time.isoformat(), end_time.isoformat())
     )
-    return await cursor.fetchall()
+    return list(await cursor.fetchall())
 
 
 def _merge_channel_programs(

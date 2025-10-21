@@ -8,9 +8,9 @@ class CustomSettings(BaseSettings):
 
     database_path: str = "./data/epg.db"
     epg_sources: list[str] | None = None
-    log_level: str = "INFO"
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
     max_epg_depth: int = 14  # Days to keep past programs (archive)
+    max_future_epg_limit: int = 7 # Days to keep future epg
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -40,7 +40,7 @@ settings = CustomSettings()
 def setup_logging() -> None:
     """Configure application logging"""
     logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
+        level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )

@@ -25,7 +25,7 @@ def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_
     try:
         tree = etree.parse(file_path)
     except Exception as e:
-        print(f"Error parsing XML file: {e}")
+        logger.error(f"Error parsing XML file: {e}")
         return [], []
 
     root = tree.getroot()

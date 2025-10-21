@@ -31,7 +31,7 @@ async def root() -> dict:
             "fetch": "/fetch - Manually trigger EPG fetch",
             "channels": "/channels - Get all channels",
             "programs": "/programs - Get programs (query params: start_from, start_to)",
-            "epg": "/epg - Get EPG for multiple channels with individual time windows (POST)",
+            "epg": "/epg - Get EPG for multiple channels (POST, optional body params: from_date, to_date)",
             "health": "/health - Health check"
         }
     }
@@ -99,7 +99,7 @@ async def get_epg(
     Get EPG data for multiple channels with individual time windows
 
     Args:
-        request: EPG request with channels, update mode, and timezone
+        request: EPG request with channels, update mode, timezone, and optional date range
 
     Returns:
         EPG data grouped by channel xmltv_id with timestamps in requested timezone
