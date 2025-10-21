@@ -4,12 +4,15 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 
 ## Features
 
-- Fetch EPG from multiple XMLTV sources
-- Parse XMLTV format with timezone conversion
-- SQLite storage with WAL mode for concurrency
-- REST API for channels and programs
-- Automatic scheduled fetching (cron-based)
-- Docker support
+- **Multi-source EPG fetching** - Fetch and merge data from multiple XMLTV sources
+- **Flexible date filtering** - Query EPG with custom date ranges (from_date, to_date)
+- **Timezone support** - Convert timestamps to any IANA timezone
+- **Smart data merging** - Automatic deduplication across sources
+- **SQLite storage** - WAL mode for concurrent read/write operations
+- **REST API** - FastAPI-based endpoints for channels and programs
+- **Automatic scheduling** - Cron-based scheduled fetching
+- **Concurrency protection** - Prevents overlapping fetch operations
+- **Docker support** - Ready-to-deploy containerized setup
 
 ## Project Structure
 
@@ -91,6 +94,9 @@ EPG_FETCH_CRON=0 3 * * *
 
 # Archive depth (days to keep historical programs)
 MAX_EPG_DEPTH=14
+
+# Future EPG limit (days to keep future programs)
+MAX_FUTURE_EPG_LIMIT=7
 ```
 
 **Cron Examples:**
@@ -128,18 +134,63 @@ curl "http://localhost:8000/programs?start_from=2025-10-09T00:00:00Z&start_to=20
 ```
 
 ### POST /epg
-Get EPG data for multiple channels with individual time windows and timezone conversion
+Get EPG data for multiple channels with flexible date filtering and timezone conversion
 
+**Request body:**
+```json
+{
+  "channels": [
+    {"xmltv_id": "channel1", "epg_depth": 7},
+    {"xmltv_id": "channel2", "epg_depth": 3}
+  ],
+  "update": "force",
+  "timezone": "Europe/London",
+  "from_date": "2025-10-09T00:00:00Z",  // Optional
+  "to_date": "2025-10-15T23:59:59Z"     // Optional
+}
+```
+
+**Date filtering modes:**
+- No dates: Uses `epg_depth` and `update` mode (default behavior)
+- `from_date` only: Returns all EPG from this date to most recent
+- `to_date` only: Returns all EPG up to this date
+- Both dates: Returns EPG between the dates (inclusive)
+
+**Examples:**
+
+Standard query (using epg_depth):
 ```bash
 curl -X POST http://localhost:8000/epg \
   -H "Content-Type: application/json" \
   -d '{
-    "channels": [
-      {"xmltv_id": "channel1", "epg_depth": 7},
-      {"xmltv_id": "channel2", "epg_depth": 3}
-    ],
+    "channels": [{"xmltv_id": "channel1", "epg_depth": 7}],
     "update": "force",
     "timezone": "Europe/London"
+  }'
+```
+
+Custom date range:
+```bash
+curl -X POST http://localhost:8000/epg \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [{"xmltv_id": "channel1", "epg_depth": 7}],
+    "update": "force",
+    "timezone": "UTC",
+    "from_date": "2025-10-09T00:00:00Z",
+    "to_date": "2025-10-15T23:59:59Z"
+  }'
+```
+
+Future programs only:
+```bash
+curl -X POST http://localhost:8000/epg \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [{"xmltv_id": "channel1", "epg_depth": 0}],
+    "update": "delta",
+    "timezone": "America/New_York",
+    "from_date": "2025-10-21T00:00:00Z"
   }'
 ```
 
@@ -155,6 +206,27 @@ SQLite with WAL mode for concurrent read/write operations.
 - Historical: Configurable via `MAX_EPG_DEPTH` (default 14 days)
 - Future: Unlimited (accepts all future programs from sources)
 - Auto-cleanup on each fetch
+
+## Recent Improvements
+
+### Flexible Date Filtering (v0.2.0)
+- Added optional `from_date` and `to_date` parameters to `/epg` endpoint
+- Three filtering modes: from-only, to-only, or date range
+- Full backward compatibility with existing `epg_depth` behavior
+- ISO8601 format validation with clear error messages
+
+### Code Quality Enhancements
+- Refactored exception handling with specific error types
+- Added comprehensive docstrings to all functions
+- Improved type safety throughout the codebase
+- Extracted reusable utilities to dedicated modules
+- Simplified complex functions for better maintainability
+
+### Architecture Improvements
+- Consolidated date/time utilities into single module
+- Better separation of concerns across services
+- Type-safe helper functions with proper annotations
+- Clean, documented codebase ready for production
 
 ## Development
 
