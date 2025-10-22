@@ -7,7 +7,12 @@
       "Bash(git add:*)",
       "Bash(git commit -m \"$(cat <<''EOF''\nRefactor exception handling and fix type errors\n\nException Handling Improvements:\n- file_operations.py: Replace broad Exception with specific OSError/PermissionError\n- xmltv_parser_service.py: Replace broad Exception with specific ValueError/IndexError/KeyError\n- xmltv_parser_service.py: Let XML parsing errors propagate with proper documentation\n- scheduler_service.py: Remove unnecessary try-except in _setup_jobs, let errors propagate\n\nType Safety Fixes:\n- epg_fetch_service.py: Fix type errors with settings.epg_sources (list[str] | None)\n- epg_fetch_service.py: Add type guard for epg_sources enumeration\n- epg_fetch_service.py: Fix syntax error (remove stray ''c'' character)\n\nCode Quality:\n- Simplify control flow by inverting conditions\n- Add proper docstring annotations for raised exceptions\n- Improve error handling specificity for better debugging\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(git push)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker-compose down:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
