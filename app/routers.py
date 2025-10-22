@@ -43,7 +43,7 @@ async def health_check() -> dict:
     next_run = epg_scheduler.get_next_run_time()
     return {
         "status": "ok",
-        "scheduler_running": epg_scheduler.scheduler.running,
+        "scheduler_running": epg_scheduler.scheduler.running if epg_scheduler.scheduler else False,
         "next_fetch": next_run.isoformat() if next_run else None
     }
 

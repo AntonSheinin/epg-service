@@ -13,8 +13,8 @@ class EPGScheduler:
     """Scheduler for automatic EPG fetching"""
 
     def __init__(self):
-        self.scheduler = AsyncIOScheduler()
-        self._setup_jobs()
+        self.scheduler: AsyncIOScheduler | None = None
+        self._initialized: bool = False
 
     def _setup_jobs(self) -> None:
         """
@@ -23,6 +23,9 @@ class EPGScheduler:
         Raises:
             ValueError: If cron expression is invalid
         """
+        if self.scheduler is None:
+            raise RuntimeError("Scheduler not initialized")
+
         trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
 
         self.scheduler.add_job(
@@ -49,19 +52,37 @@ class EPGScheduler:
             logger.error(f"Exception in scheduled fetch: {e}", exc_info=True)
 
     def start(self) -> None:
-        """Start the scheduler"""
+        """Start the scheduler - must be called from async context"""
+        if not self._initialized:
+            # Initialize scheduler in async context
+            self.scheduler = AsyncIOScheduler(timezone='UTC')
+            self._setup_jobs()
+            self._initialized = True
+
+        if self.scheduler is None:
+            raise RuntimeError("Scheduler initialization failed")
+
         if not self.scheduler.running:
             self.scheduler.start()
-            logger.info("Scheduler started")
+            logger.info(f"Scheduler started. Running: {self.scheduler.running}, State: {self.scheduler.state}")
+
+            # Log next run time
+            job = self.scheduler.get_job('epg_fetch')
+            if job:
+                logger.info(f"Next EPG fetch scheduled for: {job.next_run_time}")
+        else:
+            logger.warning("Scheduler already running")
 
     def shutdown(self) -> None:
         """Shutdown the scheduler"""
-        if self.scheduler.running:
+        if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped")
 
     def get_next_run_time(self) -> datetime | None:
         """Get next scheduled run time"""
+        if not self.scheduler:
+            return None
         job = self.scheduler.get_job('epg_fetch')
         return job.next_run_time if job else None
 
