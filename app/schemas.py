@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo
 from datetime import datetime
 
+from app.utils.timezone import parse_iso8601_to_utc, DateFormatError
+
 
 class ChannelEPGRequest(BaseModel):
     """Single channel EPG request"""
@@ -31,21 +33,18 @@ class EPGRequest(BaseModel):
     @field_validator('from_date', 'to_date')
     @classmethod
     def validate_date_format(cls, v: str) -> str:
-        """Validate ISO8601 datetime format"""
+        """Validate ISO8601 datetime format using centralized parser"""
         try:
-            # Try parsing as ISO8601 datetime
-            # Replace 'Z' with '+00:00' for proper parsing
-            date_str = v.replace('Z', '+00:00') if v.endswith('Z') else v
-            datetime.fromisoformat(date_str)
+            parse_iso8601_to_utc(v)  # Validate using centralized parser
             return v
-        except (ValueError, AttributeError) as e:
+        except DateFormatError as e:
             raise ValueError(f"Invalid datetime format: {v}. Must be valid ISO8601 format (e.g., '2025-10-09T00:00:00Z' or '2025-10-09T00:00:00+00:00')")
 
     @model_validator(mode='after')
     def validate_date_range(self):
-        """Validate that from_date is before to_date"""
-        from_dt = datetime.fromisoformat(self.from_date.replace('Z', '+00:00') if self.from_date.endswith('Z') else self.from_date)
-        to_dt = datetime.fromisoformat(self.to_date.replace('Z', '+00:00') if self.to_date.endswith('Z') else self.to_date)
+        """Validate that from_date is before to_date using centralized parser"""
+        from_dt = parse_iso8601_to_utc(self.from_date)
+        to_dt = parse_iso8601_to_utc(self.to_date)
 
         if from_dt >= to_dt:
             raise ValueError(f"from_date ({self.from_date}) must be before to_date ({self.to_date})")
@@ -60,6 +59,20 @@ class ProgramResponse(BaseModel):
     stop_time: str
     title: str
     description: str | None
+
+
+class ErrorDetail(BaseModel):
+    """Standard error detail"""
+    code: str = Field(..., description="Error code (e.g., 'FETCH_FAILED', 'VALIDATION_ERROR')")
+    message: str = Field(..., description="Human-readable error message")
+    context: dict | None = Field(None, description="Additional context about the error")
+
+
+class StandardErrorResponse(BaseModel):
+    """Standardized error response for all endpoints"""
+    status: str = Field("error", description="Status indicator")
+    timestamp: str = Field(..., description="ISO8601 timestamp of error")
+    error: ErrorDetail = Field(..., description="Error details")
 
 
 class EPGResponse(BaseModel):
