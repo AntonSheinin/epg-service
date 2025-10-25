@@ -28,14 +28,26 @@ def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_
         FileNotFoundError: If file doesn't exist
         OSError: If file can't be read
     """
-    tree = etree.parse(file_path)
-    root = tree.getroot()
+    logger.debug(f"Parsing XMLTV file: {file_path}")
 
+    try:
+        logger.debug("  Loading XML document...")
+        tree = etree.parse(file_path)
+        root = tree.getroot()
+        logger.debug(f"  XML document loaded (root tag: {root.tag})")
+    except etree.XMLSyntaxError as e:
+        logger.error(f"  XML parsing error: {e}")
+        raise
+
+    logger.debug("  Extracting channels...")
     channels = _parse_channels(root)
-    programs = _parse_programs(root, time_from, time_to)
+    logger.debug(f"    Found {len(channels)} valid channels")
 
-    logger.info(f"  Parsed {len(channels)} channels")
-    logger.info(f"  Parsed {len(programs)} programs")
+    logger.debug(f"  Extracting programs (time filter: {time_from} to {time_to})...")
+    programs = _parse_programs(root, time_from, time_to)
+    logger.debug(f"    Found {len(programs)} programs in time window")
+
+    logger.info(f"XMLTV parsing complete: {len(channels)} channels, {len(programs)} programs")
 
     return channels, programs
 

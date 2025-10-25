@@ -37,15 +37,20 @@ async def process_single_source(
     temp_file = None
     try:
         # Download with retry logic
+        logger.info(f"  [Source {source_index}] Starting download (time window: {time_from.date()} to {time_to.date()})...")
         temp_file = await download_file(source_url, f"epg_source_{source_index}.xml")
+        logger.info(f"  [Source {source_index}] Download successful")
 
         # Parse
+        logger.info(f"  [Source {source_index}] Parsing XMLTV content...")
         channels, programs = await parse_xmltv_async(temp_file, time_from, time_to)
+        logger.info(f"  [Source {source_index}] Parsing complete: {len(channels)} channels, {len(programs)} programs")
 
         return channels, programs
 
     finally:
         if temp_file:
+            logger.debug(f"  [Source {source_index}] Cleaning up temporary file...")
             cleanup_temp_file(temp_file)
 
 
@@ -72,10 +77,12 @@ async def parse_xmltv_async(
         ValueError: If no channels/programs found or parsing times out
         asyncio.TimeoutError: If parsing exceeds timeout
     """
-    logger.info("Parsing XMLTV file...")
+    logger.debug(f"Parsing XMLTV file from {file_path}...")
+    logger.debug(f"  Time window filter: {time_from.isoformat()} to {time_to.isoformat()}")
 
     try:
         loop = asyncio.get_event_loop()
+        logger.debug("Offloading XML parsing to thread pool executor...")
         channels, programs = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
@@ -86,17 +93,20 @@ async def parse_xmltv_async(
             ),
             timeout=300  # 5 minutes max for XML parsing
         )
+        logger.debug(f"XML parsing completed successfully")
     except asyncio.TimeoutError:
         logger.error(f"XML parsing timed out after 5 minutes for {file_path}")
         raise ValueError("XML parsing timed out - file may be too large or malformed")
 
     if not channels:
+        logger.warning("No channels found in XMLTV file")
         raise ValueError("No channels found in XMLTV")
 
     if not programs:
+        logger.warning("No programs found in XMLTV file (possibly outside time window)")
         raise ValueError("No programs found in XMLTV")
 
-    logger.info(f"Parsed {len(channels)} channels and {len(programs)} programs")
+    logger.debug(f"XMLTV parsing results: {len(channels)} channels, {len(programs)} programs")
 
     return channels, programs
 
@@ -119,6 +129,12 @@ def merge_source_data(
     Returns:
         Tuple of (new_channels_count, new_programs_count)
     """
+    logger.debug(f"Merging {len(new_channels)} channels into aggregate (current: {len(all_channels)})")
     _, new_channels_count = merge_channels(all_channels, new_channels)
+    logger.debug(f"  Merged channels: {new_channels_count} new/updated")
+
+    logger.debug(f"Merging {len(new_programs)} programs into aggregate (current: {len(all_programs)})")
     _, new_programs_count = merge_programs(all_programs, new_programs)
+    logger.debug(f"  Merged programs: {new_programs_count} new/updated")
+
     return new_channels_count, new_programs_count

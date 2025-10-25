@@ -50,31 +50,38 @@ async def download_file(url: str, filename: str) -> Path:
     Raises:
         httpx.HTTPError: If download fails after retries
     """
-    logger.info(f"Downloading from {url}...")
+    logger.debug(f"Starting download from URL: {url}")
+    logger.debug(f"  Temporary filename: {filename}")
 
     client = get_http_client()
 
     for attempt in range(3):
         try:
+            logger.debug(f"  Download attempt {attempt + 1}/3")
             response = await client.get(url)
             response.raise_for_status()
+
+            logger.debug(f"  HTTP {response.status_code}: Download completed")
 
             temp_dir = Path(tempfile.gettempdir())
             temp_file = temp_dir / filename
 
+            logger.debug(f"  Writing to temporary file: {temp_file}")
             async with aiofiles.open(temp_file, 'wb') as f:
                 await f.write(response.content)
 
             file_size = len(response.content) / (1024 * 1024)
-            logger.info(f"Downloaded {file_size:.2f} MB")
+            logger.info(f"Successfully downloaded {file_size:.2f} MB from EPG source")
+            logger.debug(f"  Saved to: {temp_file}")
             return temp_file
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError) as e:
             if attempt < 2:
-                logger.warning(f"Download attempt {attempt + 1}/3 failed: {type(e).__name__}. Retrying...")
-                await asyncio.sleep(2 ** attempt)
+                wait_time = 2 ** attempt
+                logger.warning(f"Download attempt {attempt + 1}/3 failed: {type(e).__name__}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Download failed after 3 attempts: {type(e).__name__}")
+                logger.error(f"Download failed after 3 attempts. Final error: {type(e).__name__}: {e}")
                 raise
 
 

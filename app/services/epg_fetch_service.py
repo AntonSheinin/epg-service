@@ -76,15 +76,16 @@ async def _do_fetch() -> dict:
         fetch_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         fetch_end = now + timedelta(days=settings.max_future_epg_limit)
 
-        logger.info(f"Archive boundary: {archive_boundary.date()}")
-        logger.info(f"Fetch boundary: {fetch_start.date()} 00:00 UTC")
-        logger.info(f"Max EPG depth: {settings.max_epg_depth} days")
+        logger.info(f"Time boundaries - Archive: {archive_boundary.date()}, Fetch: {fetch_start.date()} to {fetch_end.date()}")
+        logger.info(f"Configuration - Max depth: {settings.max_epg_depth} days, Max future: {settings.max_future_epg_limit} days")
 
         # Clean up old data
+        logger.info(f"Deleting programs before {archive_boundary.date()}...")
         session_factory = _get_session_factory()
 
         async with session_factory() as db:
             deleted_count = await delete_old_programs(db, archive_boundary)
+            logger.info(f"Deleted {deleted_count} old programs")
 
         # Process all sources
         all_channels: dict[str, ChannelTuple] = {}
@@ -92,21 +93,27 @@ async def _do_fetch() -> dict:
         source_stats = []
 
         epg_sources = settings.epg_sources or []
-        logger.info(f"Processing {len(epg_sources)} source(s)")
+        logger.info(f"Starting to process {len(epg_sources)} EPG source(s)")
 
         for idx, source_url in enumerate(epg_sources, 1):
-            logger.info(f"Processing source {idx}/{len(epg_sources)}: {_sanitize_url_for_logging(source_url)}")
+            sanitized_url = _sanitize_url_for_logging(source_url)
+            logger.info(f"[Source {idx}/{len(epg_sources)}] Starting download: {sanitized_url}")
 
             try:
+                logger.debug(f"[Source {idx}] Downloading and parsing XMLTV from {sanitized_url}")
                 channels, programs = await process_single_source(
                     source_url, idx, fetch_start, fetch_end
                 )
 
+                logger.debug(f"[Source {idx}] Downloaded content contains {len(channels)} channels and {len(programs)} programs")
+
+                logger.info(f"[Source {idx}] Merging data into aggregate collections...")
                 new_channels_count, new_programs_count = merge_source_data(
                     all_channels, all_programs, channels, programs
                 )
 
-                logger.info(f"Source {idx}: {new_channels_count} new channels, {new_programs_count} new programs")
+                logger.info(f"[Source {idx}] Successfully merged: {new_channels_count} new channels, {new_programs_count} new programs")
+                logger.info(f"[Source {idx}] Total merged so far: {len(all_channels)} channels, {len(all_programs)} programs")
 
                 source_stats.append({
                     "source_index": idx,
@@ -119,7 +126,7 @@ async def _do_fetch() -> dict:
                 })
 
             except Exception as e:
-                logger.error(f"Error processing source {idx}: {e}", exc_info=True)
+                logger.error(f"[Source {idx}] Failed to process: {e}", exc_info=True)
                 source_stats.append({
                     "source_index": idx,
                     "source_url": source_url,
@@ -128,24 +135,30 @@ async def _do_fetch() -> dict:
                 })
 
         # Validate results
+        logger.info(f"Processing complete. Aggregated data: {len(all_channels)} channels, {len(all_programs)} programs")
+
         if not all_channels or not all_programs:
-            if not all_channels:
-                logger.error("No channels found across all sources")
-            else:
-                logger.error("No programs found across all sources")
+            error_msg = f"{'No channels' if not all_channels else 'No programs'} found across all sources"
+            logger.error(error_msg)
             return {
-                "error": f"{'No channels' if not all_channels else 'No programs'} found across all sources",
+                "error": error_msg,
                 "sources": source_stats
             }
 
-        # Store results
-        logger.info(f"Storing: {len(all_channels)} channels, {len(all_programs)} programs")
+        # Store results to database
+        logger.info(f"Starting database transaction for storing {len(all_channels)} channels and {len(all_programs)} programs...")
 
         async with session_factory() as db:
             async with db.begin():
+                logger.info(f"Storing channels...")
                 await store_channels(db, list(all_channels.values()))
-                inserted_count = await store_programs(db, list(all_programs.values()))
+                logger.debug(f"Stored {len(all_channels)} channels")
 
+                logger.info(f"Storing programs...")
+                inserted_count = await store_programs(db, list(all_programs.values()))
+                logger.debug(f"Inserted {inserted_count} programs")
+
+        logger.info(f"Database transaction committed successfully")
         logger.info(f"EPG fetch completed at {datetime.now(timezone.utc).isoformat()}")
 
         return {
