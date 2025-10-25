@@ -15,44 +15,28 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-async def download_file(
-    url: str,
-    filename: str,
-    timeout: float = 120.0,
-    max_retries: int = 3,
-    backoff_factor: float = 2.0
-) -> Path:
+async def download_file(url: str, filename: str) -> Path:
     """
-    Download a file from URL with exponential backoff retry logic
-
-    Retries on transient network errors (timeouts, connection errors).
-    Does NOT retry on 4xx HTTP errors (client errors).
+    Download a file from URL with basic retry logic (3 attempts)
 
     Args:
         url: URL to download from
         filename: Name for the temporary file
-        timeout: HTTP timeout in seconds
-        max_retries: Maximum number of retry attempts
-        backoff_factor: Exponential backoff multiplier (wait = backoff_factor ^ attempt)
 
     Returns:
         Path to downloaded temporary file
 
     Raises:
-        httpx.HTTPError: If download fails after all retries
-        asyncio.TimeoutError: If operation times out
+        httpx.HTTPError: If download fails after retries
     """
-    logger.info(f"Downloading file from {url}...")
+    logger.info(f"Downloading from {url}...")
 
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 response = await client.get(url)
                 response.raise_for_status()
 
-                # Use system temp directory (cross-platform)
                 temp_dir = Path(tempfile.gettempdir())
                 temp_file = temp_dir / filename
 
@@ -60,47 +44,16 @@ async def download_file(
                     await f.write(response.content)
 
                 file_size = len(response.content) / (1024 * 1024)
-                logger.info(f"Downloaded {file_size:.2f} MB to {temp_file}")
-
+                logger.info(f"Downloaded {file_size:.2f} MB")
                 return temp_file
 
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
-            # Transient network errors - retry
-            last_error = e
-            if attempt < max_retries - 1:
-                wait_time = backoff_factor ** attempt
-                logger.warning(
-                    f"Download attempt {attempt + 1}/{max_retries} failed (transient error): {type(e).__name__}. "
-                    f"Retrying in {wait_time:.1f}s..."
-                )
-                await asyncio.sleep(wait_time)
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError) as e:
+            if attempt < 2:
+                logger.warning(f"Download attempt {attempt + 1}/3 failed: {type(e).__name__}. Retrying...")
+                await asyncio.sleep(2 ** attempt)
             else:
-                logger.error(f"Download failed after {max_retries} attempts (transient error)")
-
-        except httpx.HTTPStatusError as e:
-            # HTTP errors - don't retry on 4xx (client error), retry on 5xx (server error)
-            if 400 <= e.response.status_code < 500:
-                logger.error(f"HTTP {e.response.status_code} (client error): {e}")
+                logger.error(f"Download failed after 3 attempts: {type(e).__name__}")
                 raise
-
-            # 5xx server error - retry
-            last_error = e
-            if attempt < max_retries - 1:
-                wait_time = backoff_factor ** attempt
-                logger.warning(
-                    f"Download attempt {attempt + 1}/{max_retries} failed "
-                    f"(HTTP {e.response.status_code} server error). "
-                    f"Retrying in {wait_time:.1f}s..."
-                )
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"Download failed after {max_retries} attempts (HTTP {e.response.status_code})")
-
-    # If we exhausted all retries, raise the last error
-    if last_error:
-        raise last_error
-
-    raise RuntimeError(f"Failed to download {url} after {max_retries} attempts")
 
 
 def cleanup_temp_file(file_path: Path) -> bool:

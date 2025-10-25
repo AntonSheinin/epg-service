@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 from app.config import setup_logging
 from app.database import init_db
 from app.services.scheduler_service import epg_scheduler
-from app.dependencies import get_service_locator
 from app.routers import main_router
 
 
@@ -22,10 +21,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting EPG Service...")
 
     try:
-        # Initialize dependencies
-        locator = get_service_locator()
-        logger.debug("Service locator initialized")
-
         # Initialize database
         logger.info("Initializing database...")
         await init_db()
