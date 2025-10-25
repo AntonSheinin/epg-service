@@ -83,12 +83,19 @@ async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
     if not programs:
         return 0
 
-    # Step 1: Get all existing program IDs in a single query (not N queries)
+    # Step 1: Get all existing program IDs in batches (SQLite has variable limit)
     program_ids = [p['id'] for p in programs]
-    existing_result = await db.execute(
-        select(Program.id).where(Program.id.in_(program_ids))
-    )
-    existing_ids = {row[0] for row in existing_result.fetchall()}
+    existing_ids = set()
+
+    # Process in chunks of 1000 to avoid SQLite "too many SQL variables" error
+    chunk_size = 1000
+    for i in range(0, len(program_ids), chunk_size):
+        chunk = program_ids[i:i + chunk_size]
+        if chunk:
+            existing_result = await db.execute(
+                select(Program.id).where(Program.id.in_(chunk))
+            )
+            existing_ids.update(row[0] for row in existing_result.fetchall())
 
     # Step 2: Create Program objects only for new programs
     new_programs = []
