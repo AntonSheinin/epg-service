@@ -157,16 +157,20 @@ async def _do_fetch() -> dict:
         logger.info(f"Starting database transaction for storing {len(all_channels)} channels and {len(all_programs)} programs...")
 
         async with session_factory() as db:
-            async with db.begin():
-                logger.info(f"Storing channels...")
-                await store_channels(db, list(all_channels.values()))
-                logger.debug(f"Stored {len(all_channels)} channels")
+            try:
+                async with db.begin():
+                    logger.info(f"Storing channels...")
+                    await store_channels(db, list(all_channels.values()))
+                    logger.info(f"Channels prepared for storage")
 
-                logger.info(f"Storing programs...")
-                inserted_count = await store_programs(db, list(all_programs.values()))
-                logger.debug(f"Inserted {inserted_count} programs")
+                    logger.info(f"Storing programs...")
+                    inserted_count = await store_programs(db, list(all_programs.values()))
+                    logger.info(f"Programs prepared for storage")
 
-        logger.info(f"Database transaction committed successfully")
+                logger.info(f"Database transaction committed successfully")
+            except Exception as e:
+                logger.error(f"Error during database transaction: {e}", exc_info=True)
+                raise
         logger.info(f"EPG fetch completed at {datetime.now(timezone.utc).isoformat()}")
 
         return {
