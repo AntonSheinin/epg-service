@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,6 +23,7 @@ class EPGScheduler:
 
         Raises:
             ValueError: If cron expression is invalid
+            RuntimeError: If scheduler not initialized
         """
         if self.scheduler is None:
             raise RuntimeError("Scheduler not initialized")
@@ -52,9 +54,21 @@ class EPGScheduler:
             logger.error(f"Exception in scheduled fetch: {e}", exc_info=True)
 
     def start(self) -> None:
-        """Start the scheduler - must be called from async context"""
+        """
+        Start the scheduler
+
+        Must be called from async context (FastAPI lifespan).
+        Initializes the scheduler and registers jobs.
+        """
         if not self._initialized:
-            # Initialize scheduler in async context
+            # Initialize scheduler with the current event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.error("start() must be called from async context")
+                raise RuntimeError("Scheduler must be started from async context")
+
+            # Create scheduler bound to current event loop
             self.scheduler = AsyncIOScheduler(timezone='UTC')
             self._setup_jobs()
             self._initialized = True
@@ -63,21 +77,29 @@ class EPGScheduler:
             raise RuntimeError("Scheduler initialization failed")
 
         if not self.scheduler.running:
-            self.scheduler.start()
-            logger.info(f"Scheduler started. Running: {self.scheduler.running}, State: {self.scheduler.state}")
+            try:
+                self.scheduler.start()
+                logger.info(f"Scheduler started. Running: {self.scheduler.running}, State: {self.scheduler.state}")
 
-            # Log next run time
-            job = self.scheduler.get_job('epg_fetch')
-            if job:
-                logger.info(f"Next EPG fetch scheduled for: {job.next_run_time}")
+                # Log next run time
+                job = self.scheduler.get_job('epg_fetch')
+                if job:
+                    logger.info(f"Next EPG fetch scheduled for: {job.next_run_time}")
+            except Exception as e:
+                logger.error(f"Failed to start scheduler: {e}", exc_info=True)
+                raise
         else:
             logger.warning("Scheduler already running")
 
     def shutdown(self) -> None:
         """Shutdown the scheduler"""
         if self.scheduler and self.scheduler.running:
-            self.scheduler.shutdown()
-            logger.info("Scheduler stopped")
+            try:
+                self.scheduler.shutdown()
+                logger.info("Scheduler stopped")
+            except Exception as e:
+                logger.error(f"Error during scheduler shutdown: {e}", exc_info=True)
+        self._initialized = False
 
     def get_next_run_time(self) -> datetime | None:
         """Get next scheduled run time"""

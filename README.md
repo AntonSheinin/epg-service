@@ -5,12 +5,13 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 ## Features
 
 - **Multi-source EPG fetching** - Fetch and merge data from multiple XMLTV sources
-- **Flexible date filtering** - Query EPG with custom date ranges (from_date, to_date)
+- **Date range filtering** - Query EPG with required from_date and to_date parameters
 - **Timezone support** - Convert timestamps to any IANA timezone
 - **Smart data merging** - Automatic deduplication across sources
+- **SQLAlchemy ORM** - Type-safe database operations with SQLite backend
 - **SQLite storage** - WAL mode for concurrent read/write operations
 - **REST API** - FastAPI-based endpoints for channels and programs
-- **Automatic scheduling** - Cron-based scheduled fetching
+- **Automatic scheduling** - APScheduler-based scheduled fetching with event loop integration
 - **Concurrency protection** - Prevents overlapping fetch operations
 - **Docker support** - Ready-to-deploy containerized setup
 
@@ -120,78 +121,66 @@ Manually trigger EPG fetch from sources
 curl -X POST http://localhost:8000/fetch
 ```
 
-### GET /channels
-Get all available channels
-
-```bash
-curl http://localhost:8000/channels
-```
-
-### GET /programs
-Get programs in time range
-
-```bash
-curl "http://localhost:8000/programs?start_from=2025-10-09T00:00:00Z&start_to=2025-10-10T00:00:00Z"
-```
-
 ### POST /epg
-Get EPG data for multiple channels with flexible date filtering and timezone conversion
+Get EPG data for multiple channels with date range filtering and timezone conversion
 
 **Request body:**
 ```json
 {
   "channels": [
-    {"xmltv_id": "channel1", "epg_depth": 7},
-    {"xmltv_id": "channel2", "epg_depth": 3}
+    {"xmltv_id": "channel1"},
+    {"xmltv_id": "channel2"}
   ],
-  "update": "force",
   "timezone": "Europe/London",
-  "from_date": "2025-10-09T00:00:00Z",  // Optional
-  "to_date": "2025-10-15T23:59:59Z"     // Optional
+  "from_date": "2025-10-09T00:00:00Z",
+  "to_date": "2025-10-15T23:59:59Z"
 }
 ```
 
-**Date filtering modes:**
-- No dates: Uses `epg_depth` and `update` mode (default behavior)
-- `from_date` only: Returns all EPG from this date to most recent
-- `to_date` only: Returns all EPG up to this date
-- Both dates: Returns EPG between the dates (inclusive)
+**Parameters:**
+- `channels` (required): Array of channel objects with `xmltv_id`
+- `from_date` (required): ISO8601 datetime for start of range
+- `to_date` (required): ISO8601 datetime for end of range
+- `timezone` (optional): IANA timezone for response (default: UTC)
 
 **Examples:**
 
-Standard query (using epg_depth):
+Basic query:
 ```bash
 curl -X POST http://localhost:8000/epg \
   -H "Content-Type: application/json" \
   -d '{
-    "channels": [{"xmltv_id": "channel1", "epg_depth": 7}],
-    "update": "force",
+    "channels": [{"xmltv_id": "channel1"}],
+    "from_date": "2025-10-09T00:00:00Z",
+    "to_date": "2025-10-15T23:59:59Z",
     "timezone": "Europe/London"
   }'
 ```
 
-Custom date range:
+Multiple channels:
 ```bash
 curl -X POST http://localhost:8000/epg \
   -H "Content-Type: application/json" \
   -d '{
-    "channels": [{"xmltv_id": "channel1", "epg_depth": 7}],
-    "update": "force",
-    "timezone": "UTC",
+    "channels": [
+      {"xmltv_id": "channel1"},
+      {"xmltv_id": "channel2"}
+    ],
     "from_date": "2025-10-09T00:00:00Z",
-    "to_date": "2025-10-15T23:59:59Z"
+    "to_date": "2025-10-15T23:59:59Z",
+    "timezone": "UTC"
   }'
 ```
 
-Future programs only:
+Different timezone:
 ```bash
 curl -X POST http://localhost:8000/epg \
   -H "Content-Type: application/json" \
   -d '{
-    "channels": [{"xmltv_id": "channel1", "epg_depth": 0}],
-    "update": "delta",
-    "timezone": "America/New_York",
-    "from_date": "2025-10-21T00:00:00Z"
+    "channels": [{"xmltv_id": "channel1"}],
+    "from_date": "2025-10-09T00:00:00Z",
+    "to_date": "2025-10-15T23:59:59Z",
+    "timezone": "America/New_York"
   }'
 ```
 
@@ -210,10 +199,23 @@ SQLite with WAL mode for concurrent read/write operations.
 
 ## Recent Improvements
 
-### Flexible Date Filtering (v0.2.0)
-- Added optional `from_date` and `to_date` parameters to `/epg` endpoint
-- Three filtering modes: from-only, to-only, or date range
-- Full backward compatibility with existing `epg_depth` behavior
+### SQLAlchemy Migration (v0.3.0)
+- Migrated from raw aiosqlite to SQLAlchemy ORM
+- Type-safe database operations with proper async support
+- Lazy engine initialization for proper event loop handling
+- Enhanced error handling and logging
+
+### Scheduler & Fetcher Fixes
+- Fixed APScheduler event loop binding
+- Proper async context detection for scheduler startup
+- Improved error handling in startup/shutdown sequence
+- Comprehensive logging for debugging
+
+### API Simplification (v0.2.0)
+- Changed to required `from_date` and `to_date` parameters
+- Removed `update` (force/delta) mode parameters
+- Removed per-channel `epg_depth` parameter
+- Simplified request/response schemas
 - ISO8601 format validation with clear error messages
 
 ### Code Quality Enhancements

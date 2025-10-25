@@ -12,7 +12,8 @@
       "Bash(docker exec:*)",
       "Bash(docker-compose down:*)",
       "Bash(docker-compose up:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(uv run python:*)"
     ],
     "deny": [],
     "ask": []

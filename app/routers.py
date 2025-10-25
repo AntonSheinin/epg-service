@@ -1,13 +1,11 @@
 from typing import Annotated
-import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException
 import logging
 
 from app.database import get_db
 from app.schemas import EPGRequest, EPGResponse
 from app.services import (
-    get_all_channels,
-    get_programs_in_range,
     get_epg_data,
     fetch_and_process,
     epg_scheduler
@@ -29,9 +27,7 @@ async def root() -> dict:
         "next_scheduled_fetch": next_run.isoformat() if next_run else None,
         "endpoints": {
             "fetch": "/fetch - Manually trigger EPG fetch",
-            "channels": "/channels - Get all channels",
-            "programs": "/programs - Get programs (query params: start_from, start_to)",
-            "epg": "/epg - Get EPG for multiple channels (POST, optional body params: from_date, to_date)",
+            "epg": "/epg - Get EPG for multiple channels (POST)",
             "health": "/health - Health check"
         }
     }
@@ -64,36 +60,10 @@ async def trigger_fetch() -> dict:
     return result
 
 
-@main_router.get("/channels")
-async def get_channels(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)]
-) -> dict:
-    """Get all channels"""
-    return await get_all_channels(db)
-
-
-@main_router.get("/programs")
-async def get_programs(
-    start_from: Annotated[str, Query(description="ISO8601 datetime, e.g. 2025-10-09T00:00:00Z")],
-    start_to: Annotated[str, Query(description="ISO8601 datetime, e.g. 2025-10-10T00:00:00Z")],
-    db: Annotated[aiosqlite.Connection, Depends(get_db)]
-) -> dict:
-    """
-    Get all programs in time range
-
-    Args:
-        start_from: ISO8601 datetime (e.g. 2025-10-09T00:00:00Z)
-        start_to: ISO8601 datetime (e.g. 2025-10-10T00:00:00Z)
-
-    Returns:
-        Dictionary with count and list of programs
-    """
-    return await get_programs_in_range(db, start_from, start_to)
-
 @main_router.post("/epg", response_model=EPGResponse)
 async def get_epg(
     request: EPGRequest,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)]
 ) -> EPGResponse:
     """
     Get EPG data for multiple channels with individual time windows
