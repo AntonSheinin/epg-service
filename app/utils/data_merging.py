@@ -4,15 +4,16 @@ Data merging utilities
 This module handles merging of channels and programs from multiple sources.
 """
 import logging
-from typing import TypeAlias
+from typing import TypeAlias, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from app.schemas import Channel, Program
 
 logger = logging.getLogger(__name__)
 
-
-# Type aliases for clarity
-ChannelTuple: TypeAlias = tuple[str, str, str | None]  # (xmltv_id, display_name, icon_url)
-ProgramDict: TypeAlias = dict[str, str | None]
+# Type aliases for clarity - these map to Pydantic models in schemas.py
+ChannelTuple: TypeAlias = tuple[str, str, str | None]  # (xmltv_id, display_name, icon_url) - maps to Channel
+ProgramDict: TypeAlias = dict[str, str | None]  # maps to Program model
 
 
 def merge_channels(

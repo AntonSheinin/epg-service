@@ -8,7 +8,7 @@ from app.config import settings
 from app.services.epg_fetch_service import fetch_and_process
 
 
-logger = logging.getLogger("epg_service.scheduler")
+logger = logging.getLogger(__name__)
 
 class EPGScheduler:
     """Scheduler for automatic EPG fetching"""

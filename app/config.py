@@ -66,14 +66,12 @@ class CustomSettings(BaseSettings):
         super().__init__(**data)
 
         # Log configuration at startup (without sensitive URLs)
-        logger.info("="*60)
         logger.info("Configuration loaded:")
         logger.info(f"  Database: {self.database_path}")
         logger.info(f"  EPG Sources: {len(self.epg_sources or [])} configured")
         logger.info(f"  Fetch Schedule: {self.epg_fetch_cron}")
         logger.info(f"  Archive Depth: {self.max_epg_depth} days")
         logger.info(f"  Future Limit: {self.max_future_epg_limit} days")
-        logger.info("="*60)
 
 
 settings = CustomSettings()

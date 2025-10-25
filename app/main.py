@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from app.config import setup_logging
 from app.database import init_db
 from app.services.scheduler_service import epg_scheduler
-
+from app.dependencies import get_service_locator
 from app.routers import main_router
 
 
@@ -19,11 +19,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events"""
-    logger.info("="*60)
     logger.info("Starting EPG Service...")
-    logger.info("="*60)
 
     try:
+        # Initialize dependencies
+        locator = get_service_locator()
+        logger.debug("Service locator initialized")
+
         # Initialize database
         logger.info("Initializing database...")
         await init_db()
@@ -34,20 +36,14 @@ async def lifespan(app: FastAPI):
         epg_scheduler.start()
         logger.info("Scheduler started successfully")
 
-        logger.info("="*60)
         logger.info("EPG Service started successfully")
-        logger.info("="*60)
     except Exception as e:
-        logger.error("="*60)
         logger.error(f"Failed to start EPG Service: {e}", exc_info=True)
-        logger.error("="*60)
         raise
 
     yield
 
-    logger.info("="*60)
     logger.info("Shutting down EPG Service...")
-    logger.info("="*60)
 
     try:
         epg_scheduler.shutdown()
@@ -55,9 +51,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during scheduler shutdown: {e}", exc_info=True)
 
-    logger.info("="*60)
     logger.info("EPG Service stopped")
-    logger.info("="*60)
 
 
 app = FastAPI(

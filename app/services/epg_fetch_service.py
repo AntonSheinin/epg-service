@@ -5,7 +5,6 @@ Main orchestration service for EPG fetching process.
 Coordinates downloading, parsing, merging, and storage of EPG data from multiple sources.
 """
 import logging
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
@@ -16,12 +15,16 @@ from app.services.epg_downloader_service import (
     process_single_source,
     merge_source_data,
 )
+from app.services.fetch_coordinator import get_fetch_coordinator
+from app.utils.logging_helpers import (
+    log_source_processing,
+    log_fetch_start,
+    log_fetch_end,
+    log_storage_stats,
+)
 
 
-logger = logging.getLogger("epg_service.fetcher")
-
-# Global lock to prevent concurrent fetch operations
-_fetch_lock = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 
 async def fetch_and_process() -> dict:
@@ -31,17 +34,11 @@ async def fetch_and_process() -> dict:
     Returns:
         Dictionary with fetch statistics or error/skip message
     """
-    # Try to acquire lock without blocking
-    if _fetch_lock.locked():
-        logger.warning("EPG fetch already in progress, skipping this request")
-        return {
-            "status": "skipped",
-            "message": "EPG fetch operation already in progress"
-        }
+    coordinator = get_fetch_coordinator()
 
-    async with _fetch_lock:
-        logger.info("="*60)
-        logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
+    async def _do_fetch() -> dict:
+        """Inner function containing the actual fetch logic"""
+        log_fetch_start(logger)
 
         # Validate configuration
         if not settings.epg_sources:
@@ -56,6 +53,8 @@ async def fetch_and_process() -> dict:
 
         return await _orchestrate_fetch()
 
+    return await coordinator.execute(_do_fetch)
+
 
 async def _orchestrate_fetch() -> dict:
     """
@@ -69,7 +68,6 @@ async def _orchestrate_fetch() -> dict:
         return {"error": "EPG_SOURCES not configured"}
 
     logger.info(f"Processing {len(settings.epg_sources)} source(s)")
-    logger.info("="*60)
 
     try:
         # Calculate time boundaries
@@ -88,9 +86,7 @@ async def _orchestrate_fetch() -> dict:
         # Store results
         inserted_count = await _store_results(all_channels, all_programs)
 
-        logger.info("="*60)
-        logger.info("EPG fetch completed successfully")
-        logger.info("="*60)
+        log_fetch_end(logger)
 
         return _create_success_response(
             all_channels,
@@ -227,11 +223,7 @@ async def _store_results(
     Raises:
         RuntimeError: If database session cannot be created
     """
-    logger.info("="*60)
-    logger.info("Storing merged data in database...")
-    logger.info(f"Total unique channels: {len(all_channels)}")
-    logger.info(f"Total unique programs: {len(all_programs)}")
-    logger.info("="*60)
+    log_storage_stats(logger, len(all_channels), len(all_programs))
 
     try:
         session_factory = _create_session_factory()
@@ -248,10 +240,6 @@ async def _store_results(
         raise
 
 
-# ============================================================================
-# Helper functions for logging and response creation
-# ============================================================================
-
 def _log_source_header(idx: int, total: int, url: str) -> None:
     """
     Log header for source processing
@@ -261,10 +249,7 @@ def _log_source_header(idx: int, total: int, url: str) -> None:
         total: Total number of sources
         url: Source URL being processed
     """
-    logger.info("="*60)
-    logger.info(f"Processing source {idx}/{total}")
-    logger.info(f"URL: {url}")
-    logger.info("="*60)
+    log_source_processing(logger, idx, total, url)
 
 
 def _create_source_stat_success(
