@@ -1,7 +1,8 @@
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 import logging
+from croniter import croniter
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,18 @@ class CustomSettings(BaseSettings):
             return v
         return []
 
+    @field_validator('epg_sources', mode='after')
+    @classmethod
+    def validate_epg_sources(cls, v):
+        """Validate EPG source URLs are HTTP/HTTPS"""
+        if not v:
+            return v
+
+        for url in v:
+            if not url.lower().startswith(('http://', 'https://')):
+                raise ValueError(f"EPG source URL must be HTTP/HTTPS: {url}")
+        return v
+
     @field_validator('database_path')
     @classmethod
     def validate_database_path(cls, v: str) -> str:
@@ -60,6 +73,27 @@ class CustomSettings(BaseSettings):
         if v > 365:
             raise ValueError(f"{info.field_name} must be <= 365 days")
         return v
+
+    @field_validator('epg_fetch_cron')
+    @classmethod
+    def validate_cron_expression(cls, v: str) -> str:
+        """Validate cron expression is valid"""
+        try:
+            croniter(v)
+            return v
+        except (ValueError, KeyError) as e:
+            raise ValueError(f"Invalid cron expression '{v}': {e}")
+
+    @model_validator(mode='after')
+    def validate_epg_configuration(self):
+        """Validate cross-field configuration"""
+        if not self.epg_sources:
+            logger.warning("No EPG sources configured - EPG fetch will not retrieve any data")
+
+        if self.max_epg_depth == 0 and self.max_future_epg_limit == 0:
+            raise ValueError("At least one of max_epg_depth or max_future_epg_limit must be > 0")
+
+        return self
 
     def __init__(self, **data):
         """Initialize settings and log configuration"""

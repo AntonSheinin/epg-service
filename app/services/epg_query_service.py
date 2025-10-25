@@ -71,7 +71,11 @@ async def _query_programs_for_channel(
     end_time: datetime
 ) -> list[Program]:
     """
-    Query programs for a specific channel and time window
+    Query programs for a specific channel and time window.
+
+    Finds all programs that overlap the requested time range:
+    - Program starts before the range ends AND
+    - Program stops after the range starts
 
     Args:
         db: Database session
@@ -80,14 +84,17 @@ async def _query_programs_for_channel(
         end_time: End of time window
 
     Returns:
-        List of program rows
+        List of program rows that overlap the time window
     """
+    start_iso = start_time.isoformat()
+    end_iso = end_time.isoformat()
+
     stmt = (
         select(Program)
         .where(
             Program.xmltv_channel_id == channel_id,
-            Program.start_time >= start_time.isoformat(),
-            Program.start_time < end_time.isoformat()
+            Program.start_time < end_iso,  # Program starts before range ends
+            Program.stop_time > start_iso  # Program stops after range starts
         )
         .order_by(Program.start_time)
     )

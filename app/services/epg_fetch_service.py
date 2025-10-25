@@ -8,13 +8,10 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
-from app.database import _create_session_factory
+from app.database import _get_session_factory
 from app.utils.data_merging import ChannelTuple, ProgramDict
 from app.services.db_service import delete_old_programs, store_channels, store_programs
-from app.services.epg_downloader_service import (
-    process_single_source,
-    merge_source_data,
-)
+from app.services.epg_downloader_service import process_single_source, merge_source_data
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +19,20 @@ logger = logging.getLogger(__name__)
 # Global lock to prevent concurrent fetch operations
 _fetch_lock = asyncio.Lock()
 
+
+def _sanitize_url_for_logging(url: str) -> str:
+    """Remove credentials from URL for safe logging"""
+    if '://' not in url:
+        return url
+    try:
+        protocol, rest = url.split('://', 1)
+        if '@' in rest:
+            # URL contains credentials, truncate them
+            rest = rest.split('@')[1]
+            return f"{protocol}://***:***@{rest}"
+        return url
+    except (ValueError, IndexError):
+        return url
 
 async def fetch_and_process() -> dict:
     """
@@ -63,16 +74,14 @@ async def _do_fetch() -> dict:
         now = datetime.now(timezone.utc)
         archive_boundary = now - timedelta(days=settings.max_epg_depth)
         fetch_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        fetch_end = now + timedelta(days=365)
+        fetch_end = now + timedelta(days=settings.max_future_epg_limit)
 
         logger.info(f"Archive boundary: {archive_boundary.date()}")
         logger.info(f"Fetch boundary: {fetch_start.date()} 00:00 UTC")
         logger.info(f"Max EPG depth: {settings.max_epg_depth} days")
 
         # Clean up old data
-        session_factory = _create_session_factory()
-        if session_factory is None:
-            return {"error": "Database session factory not initialized"}
+        session_factory = _get_session_factory()
 
         async with session_factory() as db:
             deleted_count = await delete_old_programs(db, archive_boundary)
@@ -86,7 +95,7 @@ async def _do_fetch() -> dict:
         logger.info(f"Processing {len(epg_sources)} source(s)")
 
         for idx, source_url in enumerate(epg_sources, 1):
-            logger.info(f"Processing source {idx}/{len(epg_sources)}: {source_url}")
+            logger.info(f"Processing source {idx}/{len(epg_sources)}: {_sanitize_url_for_logging(source_url)}")
 
             try:
                 channels, programs = await process_single_source(
@@ -133,8 +142,9 @@ async def _do_fetch() -> dict:
         logger.info(f"Storing: {len(all_channels)} channels, {len(all_programs)} programs")
 
         async with session_factory() as db:
-            await store_channels(db, list(all_channels.values()))
-            inserted_count = await store_programs(db, list(all_programs.values()))
+            async with db.begin():
+                await store_channels(db, list(all_channels.values()))
+                inserted_count = await store_programs(db, list(all_programs.values()))
 
         logger.info(f"EPG fetch completed at {datetime.now(timezone.utc).isoformat()}")
 

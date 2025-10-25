@@ -28,7 +28,7 @@ class EPGRequest(BaseModel):
             # Check if timezone is valid
             ZoneInfo(v)
             return v
-        except Exception:
+        except (KeyError, ValueError):
             raise ValueError(f"Invalid timezone: {v}. Must be a valid IANA timezone (e.g., 'Europe/London', 'America/New_York') or 'UTC'")
 
     @field_validator('from_date', 'to_date')

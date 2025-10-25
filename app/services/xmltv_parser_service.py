@@ -5,10 +5,11 @@ import logging
 
 from lxml import etree # type: ignore
 
+from app.utils.data_merging import ChannelTuple, ProgramDict
 
 logger = logging.getLogger(__name__)
 
-def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list, list]:
+def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list[ChannelTuple], list[ProgramDict]]:
     """
     Parse XMLTV file and return channels and programs
 
@@ -39,7 +40,7 @@ def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_
     return channels, programs
 
 
-def _parse_channels(root: etree._Element) -> list[tuple[str, str, Optional[str]]]:
+def _parse_channels(root: etree._Element) -> list[ChannelTuple]:
     """Extract channels from XMLTV root element"""
     channels = []
 
@@ -60,7 +61,7 @@ def _parse_channels(root: etree._Element) -> list[tuple[str, str, Optional[str]]
     return channels
 
 
-def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> list[dict[str, Optional[str]]]:
+def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> list[ProgramDict]:
     """Extract programs from XMLTV root element"""
     programs = []
 
@@ -72,7 +73,7 @@ def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to
     return programs
 
 
-def _parse_single_program(programme: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> Optional[dict[str, Optional[str]]]:
+def _parse_single_program(programme: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> Optional[ProgramDict]:
     """Parse single programme element"""
     # Required fields
     channel_id = programme.get('channel')

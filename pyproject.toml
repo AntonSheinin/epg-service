@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.6.1",
     "aiofiles>=24.1.0",
     "apscheduler>=3.10.4",
+    "croniter>=2.0.0",
 ]
 
 [build-system]

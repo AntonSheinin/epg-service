@@ -3,8 +3,8 @@ SQLAlchemy ORM Models for EPG Service
 
 This module defines the database models for channels and programs.
 """
-from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Index, UniqueConstraint
+from datetime import datetime, timezone
+from sqlalchemy import String, Text, DateTime, Index, UniqueConstraint, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -20,7 +20,7 @@ class Channel(Base):
     xmltv_id: Mapped[str] = mapped_column(String, primary_key=True)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     icon_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     def __repr__(self) -> str:
         return f"<Channel(xmltv_id={self.xmltv_id}, display_name={self.display_name})>"
@@ -31,12 +31,16 @@ class Program(Base):
     __tablename__ = "programs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    xmltv_channel_id: Mapped[str] = mapped_column(String, nullable=False)
+    xmltv_channel_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("channels.xmltv_id", ondelete="CASCADE"),
+        nullable=False
+    )
     start_time: Mapped[str] = mapped_column(String, nullable=False)
     stop_time: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Constraints
     __table_args__ = (

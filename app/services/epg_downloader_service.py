@@ -50,12 +50,15 @@ async def process_single_source(
 
 
 async def parse_xmltv_async(
-    file_path,
+    file_path: str,
     time_from: datetime,
     time_to: datetime
 ) -> tuple[list[ChannelTuple], list[ProgramDict]]:
     """
-    Parse XMLTV file asynchronously (offloaded to thread pool)
+    Parse XMLTV file asynchronously with timeout protection.
+
+    File parsing is offloaded to thread pool to avoid blocking event loop.
+    A 5-minute timeout prevents malformed or massive files from hanging.
 
     Args:
         file_path: Path to XMLTV file
@@ -66,18 +69,26 @@ async def parse_xmltv_async(
         Tuple of (channels, programs)
 
     Raises:
-        ValueError: If no channels or programs found
+        ValueError: If no channels/programs found or parsing times out
+        asyncio.TimeoutError: If parsing exceeds timeout
     """
     logger.info("Parsing XMLTV file...")
 
-    loop = asyncio.get_event_loop()
-    channels, programs = await loop.run_in_executor(
-        None,
-        parse_xmltv_file,
-        str(file_path),
-        time_from,
-        time_to
-    )
+    try:
+        loop = asyncio.get_event_loop()
+        channels, programs = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                parse_xmltv_file,
+                str(file_path),
+                time_from,
+                time_to
+            ),
+            timeout=300  # 5 minutes max for XML parsing
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"XML parsing timed out after 5 minutes for {file_path}")
+        raise ValueError("XML parsing timed out - file may be too large or malformed")
 
     if not channels:
         raise ValueError("No channels found in XMLTV")

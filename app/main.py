@@ -7,9 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.config import setup_logging
-from app.database import init_db
+from app.database import init_db, close_db
 from app.services.scheduler_service import epg_scheduler
 from app.routers import main_router
+from app.utils.file_operations import close_http_client
 
 
 setup_logging()
@@ -45,6 +46,17 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler stopped")
     except Exception as e:
         logger.error(f"Error during scheduler shutdown: {e}", exc_info=True)
+
+    try:
+        await close_db()
+    except Exception as e:
+        logger.error(f"Error closing database: {e}", exc_info=True)
+
+    try:
+        await close_http_client()
+        logger.info("HTTP client closed")
+    except Exception as e:
+        logger.error(f"Error closing HTTP client: {e}", exc_info=True)
 
     logger.info("EPG Service stopped")
 

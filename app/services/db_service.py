@@ -104,8 +104,8 @@ async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
                     description=program_dict.get('description')
                 ))
             except Exception as e:
-                # Skip programs with invalid data
-                logger.debug(f"Skipping program {program_dict['id']}: {str(e)}")
+                # Skip programs with invalid data but log as warning for visibility
+                logger.warning(f"Skipping program with invalid data - {program_dict['id']}: {e}")
 
     # Step 3: Batch insert all new programs (one operation)
     if new_programs:
