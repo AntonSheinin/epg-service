@@ -1,10 +1,16 @@
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CustomSettings(BaseSettings):
-    """Application settings loaded from environment variables"""
+    """Application settings loaded from environment variables
+
+    Validates configuration at startup to catch misconfiguration early.
+    """
 
     database_path: str = "./data/epg.db"
     epg_sources: list[str] | None = None
@@ -32,6 +38,42 @@ class CustomSettings(BaseSettings):
         if isinstance(v, list):
             return v
         return []
+
+    @field_validator('database_path')
+    @classmethod
+    def validate_database_path(cls, v: str) -> str:
+        """Validate database path is accessible"""
+        path = Path(v)
+        try:
+            # Ensure directory exists
+            path.parent.mkdir(parents=True, exist_ok=True)
+            return v
+        except (OSError, PermissionError) as e:
+            raise ValueError(f"Cannot access database path '{v}': {e}")
+
+    @field_validator('max_epg_depth', 'max_future_epg_limit')
+    @classmethod
+    def validate_day_ranges(cls, v: int, info) -> int:
+        """Validate day range values are positive and reasonable"""
+        if v < 0:
+            raise ValueError(f"{info.field_name} must be >= 0")
+        if v > 365:
+            raise ValueError(f"{info.field_name} must be <= 365 days")
+        return v
+
+    def __init__(self, **data):
+        """Initialize settings and log configuration"""
+        super().__init__(**data)
+
+        # Log configuration at startup (without sensitive URLs)
+        logger.info("="*60)
+        logger.info("Configuration loaded:")
+        logger.info(f"  Database: {self.database_path}")
+        logger.info(f"  EPG Sources: {len(self.epg_sources or [])} configured")
+        logger.info(f"  Fetch Schedule: {self.epg_fetch_cron}")
+        logger.info(f"  Archive Depth: {self.max_epg_depth} days")
+        logger.info(f"  Future Limit: {self.max_future_epg_limit} days")
+        logger.info("="*60)
 
 
 settings = CustomSettings()

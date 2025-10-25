@@ -68,7 +68,10 @@ async def store_channels(db: AsyncSession, channels: list[ChannelTuple]) -> None
 
 async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
     """
-    Store programs in database and return count of inserted programs
+    Store programs in database using batch operations for efficiency
+
+    Instead of checking each program individually (N+1 queries), this loads all
+    existing IDs in one query and then batch inserts new programs.
 
     Args:
         db: Database session
@@ -77,17 +80,22 @@ async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
     Returns:
         Number of programs actually inserted (excluding duplicates)
     """
-    inserted_count = 0
-    skipped_count = 0
+    if not programs:
+        return 0
 
+    # Step 1: Get all existing program IDs in a single query (not N queries)
+    program_ids = [p['id'] for p in programs]
+    existing_result = await db.execute(
+        select(Program.id).where(Program.id.in_(program_ids))
+    )
+    existing_ids = {row[0] for row in existing_result.fetchall()}
+
+    # Step 2: Create Program objects only for new programs
+    new_programs = []
     for program_dict in programs:
-        try:
-            # Check if program already exists
-            existing = await db.execute(
-                select(Program).where(Program.id == program_dict['id'])
-            )
-            if existing.scalar_one_or_none() is None:
-                db.add(Program(
+        if program_dict['id'] not in existing_ids:
+            try:
+                new_programs.append(Program(
                     id=program_dict['id'],
                     xmltv_channel_id=program_dict['xmltv_channel_id'],
                     start_time=program_dict['start_time'],
@@ -95,16 +103,16 @@ async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
                     title=program_dict['title'],
                     description=program_dict.get('description')
                 ))
-                inserted_count += 1
-            else:
-                skipped_count += 1
-        except Exception as e:
-            # Skip programs that violate unique constraints
-            logger.debug(f"Skipping duplicate program: {program_dict['title']} on {program_dict['xmltv_channel_id']}: {str(e)}")
-            skipped_count += 1
+            except Exception as e:
+                # Skip programs with invalid data
+                logger.debug(f"Skipping program {program_dict['id']}: {str(e)}")
 
-    await db.commit()
+    # Step 3: Batch insert all new programs (one operation)
+    if new_programs:
+        db.add_all(new_programs)
+        await db.commit()
 
-    logger.info(f"Stored {inserted_count} new programs (skipped {skipped_count} duplicates)")
+    skipped_count = len(programs) - len(new_programs)
+    logger.info(f"Stored {len(new_programs)} new programs (skipped {skipped_count} duplicates)")
 
-    return inserted_count
+    return len(new_programs)
