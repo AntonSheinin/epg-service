@@ -89,8 +89,16 @@ def calculate_time_window(request: "EPGRequest") -> tuple[datetime, datetime]:
 
     Returns:
         Tuple of (start_time, end_time) in UTC
+
+    Raises:
+        ValueError: If from_date is not before to_date
     """
     # Use provided from_date and to_date
     start_time = parse_iso8601_to_utc(request.from_date)
     end_time = parse_iso8601_to_utc(request.to_date)
+
+    # Validate time order
+    if start_time >= end_time:
+        raise ValueError(f"from_date ({start_time}) must be before to_date ({end_time})")
+
     return start_time, end_time

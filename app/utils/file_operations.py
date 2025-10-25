@@ -16,13 +16,22 @@ logger = logging.getLogger(__name__)
 
 # Module-level HTTP client for connection pooling and reuse
 _http_client: httpx.AsyncClient | None = None
+_http_client_lock = asyncio.Lock()
 
 
-def get_http_client() -> httpx.AsyncClient:
-    """Get or create the module-level HTTP client for connection pooling"""
+async def get_http_client() -> httpx.AsyncClient:
+    """
+    Get or create the module-level HTTP client for connection pooling.
+
+    Thread-safe initialization with asyncio lock to prevent race conditions.
+    """
     global _http_client
     if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=120)
+        async with _http_client_lock:
+            # Double-check pattern: another coroutine might have created it while we waited
+            if _http_client is None:
+                _http_client = httpx.AsyncClient(timeout=120)
+                logger.debug("HTTP client initialized for connection pooling")
     return _http_client
 
 
@@ -53,7 +62,7 @@ async def download_file(url: str, filename: str) -> Path:
     logger.debug(f"Starting download from URL: {url}")
     logger.debug(f"  Temporary filename: {filename}")
 
-    client = get_http_client()
+    client = await get_http_client()
 
     for attempt in range(3):
         try:
@@ -75,13 +84,29 @@ async def download_file(url: str, filename: str) -> Path:
             logger.debug(f"  Saved to: {temp_file}")
             return temp_file
 
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError) as e:
+        except httpx.TimeoutException as e:
             if attempt < 2:
                 wait_time = 2 ** attempt
-                logger.warning(f"Download attempt {attempt + 1}/3 failed: {type(e).__name__}. Retrying in {wait_time}s...")
+                logger.warning(f"Download attempt {attempt + 1}/3 timed out after 120s. Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Download failed after 3 attempts. Final error: {type(e).__name__}: {e}")
+                logger.error(f"Download failed after 3 attempts due to timeout")
+                raise
+        except httpx.ConnectError as e:
+            if attempt < 2:
+                wait_time = 2 ** attempt
+                logger.warning(f"Download attempt {attempt + 1}/3 failed: connection error ({e}). Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Download failed after 3 attempts: unable to connect to server")
+                raise
+        except httpx.HTTPStatusError as e:
+            if attempt < 2:
+                wait_time = 2 ** attempt
+                logger.warning(f"Download attempt {attempt + 1}/3 failed: HTTP {e.response.status_code}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Download failed after 3 attempts: HTTP {e.response.status_code} {e.response.reason_phrase}")
                 raise
 
 

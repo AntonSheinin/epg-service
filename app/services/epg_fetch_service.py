@@ -69,6 +69,10 @@ async def _do_fetch() -> dict:
     Returns:
         Dictionary with fetch results and statistics
     """
+    # Initialize output variables to safe defaults
+    deleted_count = 0
+    inserted_count = 0
+
     try:
         # Calculate time boundaries
         now = datetime.now(timezone.utc)
@@ -81,7 +85,11 @@ async def _do_fetch() -> dict:
 
         # Clean up old data
         logger.info(f"Deleting programs before {archive_boundary.date()}...")
-        session_factory = _get_session_factory()
+        try:
+            session_factory = _get_session_factory()
+        except RuntimeError as e:
+            logger.error(f"Database not initialized: {e}")
+            return {"error": "Database not initialized"}
 
         async with session_factory() as db:
             deleted_count = await delete_old_programs(db, archive_boundary)

@@ -59,14 +59,20 @@ def _parse_channels(root: etree._Element) -> list[ChannelTuple]:
     for channel in root.findall('channel'):
         xmltv_id = channel.get('id')
         if not xmltv_id:
+            logger.debug("Skipping channel with missing ID attribute")
             continue
 
         # Get display name (first one or fallback to ID)
         display_name = _get_text(channel, 'display-name', default=xmltv_id)
 
         # Get icon URL
+        icon_url = None
         icon_elem = channel.find('icon')
-        icon_url = icon_elem.get('src') if icon_elem is not None else None
+        if icon_elem is not None:
+            try:
+                icon_url = icon_elem.get('src')
+            except (AttributeError, TypeError):
+                logger.debug(f"Failed to extract icon URL from malformed icon element for channel {xmltv_id}")
 
         channels.append((xmltv_id, display_name, icon_url))
 

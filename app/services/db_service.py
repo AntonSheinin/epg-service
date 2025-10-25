@@ -103,9 +103,12 @@ async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
                     title=program_dict['title'],
                     description=program_dict.get('description')
                 ))
+            except (ValueError, TypeError, KeyError) as e:
+                # Skip programs with invalid data types or missing keys
+                logger.warning(f"Skipping program with invalid data - {program_dict.get('id', 'unknown')}: {type(e).__name__}: {e}")
             except Exception as e:
-                # Skip programs with invalid data but log as warning for visibility
-                logger.warning(f"Skipping program with invalid data - {program_dict['id']}: {e}")
+                # Log unexpected exceptions with full context
+                logger.error(f"Unexpected error processing program {program_dict.get('id', 'unknown')}: {e}", exc_info=True)
 
     # Step 3: Batch insert all new programs (one operation)
     if new_programs:

@@ -23,6 +23,9 @@ def merge_channels(
     """
     Merge new channels into existing channel dictionary
 
+    Updates existing channel data if new source has display name or icon.
+    Counts as 'new' only if channel was not previously seen.
+
     Args:
         existing_channels: Dictionary of existing channels (xmltv_id -> channel_tuple)
         new_channels: List of new channel tuples to merge
@@ -38,7 +41,19 @@ def merge_channels(
             existing_channels[xmltv_id] = channel
             new_count += 1
         else:
-            logger.debug(f"Skipping duplicate channel: {xmltv_id} (already exists from previous source)")
+            # Update channel data if new source has better information
+            existing_id, existing_display, existing_icon = existing_channels[xmltv_id]
+            new_id, new_display, new_icon = channel
+
+            # Prefer non-empty values from new source
+            updated_display = new_display if new_display else existing_display
+            updated_icon = new_icon if new_icon else existing_icon
+
+            if updated_display != existing_display or updated_icon != existing_icon:
+                existing_channels[xmltv_id] = (xmltv_id, updated_display, updated_icon)
+                logger.debug(f"Updated channel {xmltv_id} with better data from new source")
+            else:
+                logger.debug(f"Duplicate channel (no new data): {xmltv_id}")
 
     return existing_channels, new_count
 
@@ -66,8 +81,8 @@ def merge_programs(
             new_count += 1
         else:
             logger.debug(
-                f"Skipping duplicate program: {program['title']} "
-                f"on {program['xmltv_channel_id']}"
+                f"Skipping duplicate program: {program.get('title', 'Unknown')} "
+                f"on {program.get('xmltv_channel_id', 'Unknown')}"
             )
 
     return existing_programs, new_count
