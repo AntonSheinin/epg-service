@@ -5,10 +5,10 @@ This module coordinates the EPG fetching process from multiple sources.
 """
 import logging
 import asyncio
-import aiosqlite
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
+from app.database import _create_session_factory
 from app.services.xmltv_parser_service import parse_xmltv_file
 from app.utils.file_operations import download_file, cleanup_temp_file
 from app.utils.data_merging import merge_channels, merge_programs, ChannelTuple, ProgramDict
@@ -39,9 +39,16 @@ async def fetch_and_process() -> dict:
         logger.info("="*60)
         logger.info(f"Starting EPG fetch at {datetime.now(timezone.utc).isoformat()}")
 
+        # Validate configuration
         if not settings.epg_sources:
-            logger.error("EPG_SOURCES not configured")
-            return {"error": "EPG_SOURCES not configured"}
+            error_msg = "EPG_SOURCES not configured"
+            logger.error(error_msg)
+            return {"error": error_msg}
+
+        if not settings.database_path:
+            error_msg = "DATABASE_PATH not configured"
+            logger.error(error_msg)
+            return {"error": error_msg}
 
         return await _orchestrate_fetch()
 
@@ -128,11 +135,21 @@ async def _cleanup_old_data(archive_boundary: datetime) -> int:
 
     Returns:
         Number of deleted programs
+
+    Raises:
+        RuntimeError: If database session cannot be created
     """
-    async with aiosqlite.connect(settings.database_path) as db:
-        deleted_count = await delete_old_programs(db, archive_boundary)
-        await db.commit()
-    return deleted_count
+    try:
+        session_factory = _create_session_factory()
+        if session_factory is None:
+            raise RuntimeError("Database session factory not initialized")
+
+        async with session_factory() as db:
+            deleted_count = await delete_old_programs(db, archive_boundary)
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Error cleaning up old data: {e}", exc_info=True)
+        raise
 
 
 async def _process_all_sources(boundaries: dict) -> tuple[dict[str, ChannelTuple], dict[str, ProgramDict], list[dict]]:
@@ -293,6 +310,9 @@ async def _store_results(
 
     Returns:
         Count of inserted programs
+
+    Raises:
+        RuntimeError: If database session cannot be created
     """
     logger.info("="*60)
     logger.info("Storing merged data in database...")
@@ -300,12 +320,19 @@ async def _store_results(
     logger.info(f"Total unique programs: {len(all_programs)}")
     logger.info("="*60)
 
-    async with aiosqlite.connect(settings.database_path) as db:
-        await store_channels(db, list(all_channels.values()))
-        inserted_count = await store_programs(db, list(all_programs.values()))
-        await db.commit()
+    try:
+        session_factory = _create_session_factory()
+        if session_factory is None:
+            raise RuntimeError("Database session factory not initialized")
 
-    return inserted_count
+        async with session_factory() as db:
+            await store_channels(db, list(all_channels.values()))
+            inserted_count = await store_programs(db, list(all_programs.values()))
+
+        return inserted_count
+    except Exception as e:
+        logger.error(f"Error storing results: {e}", exc_info=True)
+        raise
 
 
 # Helper functions for logging and response creation

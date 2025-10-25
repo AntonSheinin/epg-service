@@ -19,16 +19,45 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events"""
+    logger.info("="*60)
     logger.info("Starting EPG Service...")
-    await init_db()
-    epg_scheduler.start()
-    logger.info("EPG Service started successfully")
+    logger.info("="*60)
+
+    try:
+        # Initialize database
+        logger.info("Initializing database...")
+        await init_db()
+        logger.info("Database initialized successfully")
+
+        # Start scheduler
+        logger.info("Starting scheduler...")
+        epg_scheduler.start()
+        logger.info("Scheduler started successfully")
+
+        logger.info("="*60)
+        logger.info("EPG Service started successfully")
+        logger.info("="*60)
+    except Exception as e:
+        logger.error("="*60)
+        logger.error(f"Failed to start EPG Service: {e}", exc_info=True)
+        logger.error("="*60)
+        raise
 
     yield
 
+    logger.info("="*60)
     logger.info("Shutting down EPG Service...")
-    epg_scheduler.shutdown()
+    logger.info("="*60)
+
+    try:
+        epg_scheduler.shutdown()
+        logger.info("Scheduler stopped")
+    except Exception as e:
+        logger.error(f"Error during scheduler shutdown: {e}", exc_info=True)
+
+    logger.info("="*60)
     logger.info("EPG Service stopped")
+    logger.info("="*60)
 
 
 app = FastAPI(
@@ -49,7 +78,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         body = await request.body()
         logger.error(f"Request body: {body.decode('utf-8')}")
 
-    except:
+    except (ValueError, UnicodeDecodeError, RuntimeError):
         logger.error("Could not read request body")
 
     # Create a properly serializable error response

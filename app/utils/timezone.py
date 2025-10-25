@@ -3,10 +3,9 @@ Date and Time utilities
 
 This module handles all date/time conversions, parsing, and EPG time window calculations.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from app.config import settings
 from app.schemas import EPGRequest
 
 
@@ -51,30 +50,18 @@ def convert_to_timezone(utc_time_str: str, target_tz: str) -> str:
 
 
 def calculate_time_window(
-    request: EPGRequest,
-    channel_epg_depth: int,
-    now: datetime
+    request: EPGRequest
 ) -> tuple[datetime, datetime]:
     """
     Calculate start and end time for EPG query based on request parameters
 
     Args:
-        request: EPG request with optional from_date/to_date
-        channel_epg_depth: Number of days to look back for this channel
-        now: Current datetime in UTC
+        request: EPG request with from_date and to_date
 
     Returns:
         Tuple of (start_time, end_time) in UTC
     """
-    # Custom date range takes precedence
-    if request.from_date or request.to_date:
-        start_time = parse_iso8601_to_utc(request.from_date) if request.from_date else datetime.min.replace(tzinfo=timezone.utc)
-        end_time = parse_iso8601_to_utc(request.to_date) if request.to_date else now + timedelta(days=365 * 10)
-        return start_time, end_time
-
-    # Default behavior based on update mode
-    future_limit = now + timedelta(days=settings.max_future_epg_limit)
-    if request.update == "force":
-        return now - timedelta(days=channel_epg_depth), future_limit
-    else:  # delta
-        return now, future_limit
+    # Use provided from_date and to_date
+    start_time = parse_iso8601_to_utc(request.from_date)
+    end_time = parse_iso8601_to_utc(request.to_date)
+    return start_time, end_time

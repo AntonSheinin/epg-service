@@ -5,110 +5,44 @@ Business logic for querying and retrieving EPG data from database.
 This service handles all read operations for channels and programs.
 """
 from datetime import datetime, timezone
-import aiosqlite
 import logging
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Program
 from app.schemas import EPGRequest, EPGResponse, ProgramResponse
 from app.utils.timezone import convert_to_timezone, calculate_time_window
 
 logger = logging.getLogger(__name__)
 
 
-async def get_all_channels(db: aiosqlite.Connection) -> dict:
+async def get_epg_data(db: AsyncSession, request: EPGRequest) -> EPGResponse:
     """
-    Retrieve all channels from database
+    Get EPG data for multiple channels
 
     Args:
-        db: Database connection
-
-    Returns:
-        Dictionary with count and list of channels
-    """
-    cursor = await db.execute(
-        "SELECT xmltv_id, display_name, icon_url FROM channels ORDER BY display_name"
-    )
-    rows = list(await cursor.fetchall())
-
-    logger.debug(f"Retrieved {len(rows)} channels")
-
-    return {
-        "count": len(rows),
-        "channels": [dict(row) for row in rows]
-    }
-
-
-async def get_programs_in_range(
-    db: aiosqlite.Connection,
-    start_from: str,
-    start_to: str
-) -> dict:
-    """
-    Get all programs within a time range
-
-    Args:
-        db: Database connection
-        start_from: ISO8601 datetime (e.g. 2025-10-09T00:00:00Z)
-        start_to: ISO8601 datetime (e.g. 2025-10-10T00:00:00Z)
-
-    Returns:
-        Dictionary with count and list of programs
-    """
-    logger.debug(f"Fetching programs from {start_from} to {start_to}")
-
-    query = """
-        SELECT
-            id,
-            xmltv_channel_id,
-            start_time,
-            stop_time,
-            title,
-            description
-        FROM programs
-        WHERE start_time >= ? AND start_time < ?
-        ORDER BY xmltv_channel_id, start_time
-    """
-
-    cursor = await db.execute(query, (start_from, start_to))
-    rows = list(await cursor.fetchall())
-
-    logger.debug(f"Retrieved {len(rows)} programs")
-
-    return {
-        "count": len(rows),
-        "start_from": start_from,
-        "start_to": start_to,
-        "programs": [dict(row) for row in rows]
-    }
-
-
-async def get_epg_data(
-    db: aiosqlite.Connection,
-    request: EPGRequest
-) -> EPGResponse:
-    """
-    Get EPG data for multiple channels with individual time windows
-
-    Args:
-        db: Database connection
-        request: EPG request with channels, update mode, timezone, and optional from_date/to_date
+        db: Database session
+        request: EPG request with channels, from_date, to_date, and timezone
 
     Returns:
         EPG data grouped by channel xmltv_id with timestamps in requested timezone
     """
-    logger.info(f"Received EPG request: {len(request.channels)} channels, mode={request.update}, timezone={request.timezone}")
-    if request.from_date or request.to_date:
-        logger.info(f"Date range: from_date={request.from_date}, to_date={request.to_date}")
+    logger.info(f"Received EPG request: {len(request.channels)} channels, timezone={request.timezone}")
+    logger.info(f"Date range: from_date={request.from_date}, to_date={request.to_date}")
 
-    now = datetime.now(timezone.utc)
     epg_data: dict[str, list[ProgramResponse]] = {}
     channels_found_set: set[str] = set()
     total_programs = 0
+    now = datetime.now(timezone.utc)
+
+    # Calculate time window once for all channels
+    start_time, end_time = calculate_time_window(request)
 
     # Process each channel request
     for channel in request.channels:
-        start_time, end_time = calculate_time_window(request, channel.epg_depth, now)
 
-        logger.debug(f"Fetching EPG for {channel.xmltv_id}: {start_time.isoformat()} to {end_time.isoformat()}")
+        logger.info(f"Fetching EPG for {channel.xmltv_id}: {start_time.isoformat()} to {end_time.isoformat()}")
 
         programs = await _query_programs_for_channel(db, channel.xmltv_id, start_time, end_time)
 
@@ -121,7 +55,6 @@ async def get_epg_data(
     logger.info(f"EPG response: {len(channels_found_set)} channels found, {total_programs} programs, timezone={request.timezone}")
 
     return EPGResponse(
-        update_mode=request.update,
         timestamp=convert_to_timezone(now.isoformat(), request.timezone),
         timezone=request.timezone,
         channels_requested=len(request.channels),
@@ -132,16 +65,16 @@ async def get_epg_data(
 
 
 async def _query_programs_for_channel(
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     channel_id: str,
     start_time: datetime,
     end_time: datetime
-) -> list:
+) -> list[Program]:
     """
     Query programs for a specific channel and time window
 
     Args:
-        db: Database connection
+        db: Database session
         channel_id: Channel XMLTV ID
         start_time: Start of time window
         end_time: End of time window
@@ -149,25 +82,18 @@ async def _query_programs_for_channel(
     Returns:
         List of program rows
     """
-    query = """
-        SELECT
-            id,
-            start_time,
-            stop_time,
-            title,
-            description
-        FROM programs
-        WHERE xmltv_channel_id = ?
-          AND start_time >= ?
-          AND start_time < ?
-        ORDER BY start_time
-    """
-
-    cursor = await db.execute(
-        query,
-        (channel_id, start_time.isoformat(), end_time.isoformat())
+    stmt = (
+        select(Program)
+        .where(
+            Program.xmltv_channel_id == channel_id,
+            Program.start_time >= start_time.isoformat(),
+            Program.start_time < end_time.isoformat()
+        )
+        .order_by(Program.start_time)
     )
-    return list(await cursor.fetchall())
+
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
 def _merge_channel_programs(
@@ -182,7 +108,7 @@ def _merge_channel_programs(
     Args:
         epg_data: Existing EPG data dictionary (modified in place)
         channel_id: Channel XMLTV ID
-        rows: Program rows from database
+        rows: Program ORM objects from database
         timezone_str: Target timezone for conversion
 
     Returns:
@@ -195,16 +121,16 @@ def _merge_channel_programs(
         existing_ids = {p.id for p in epg_data[channel_id]}
 
         for row in rows:
-            if row["id"] not in existing_ids:
+            if row.id not in existing_ids:
                 program = ProgramResponse(
-                    id=row["id"],
-                    start_time=convert_to_timezone(row["start_time"], timezone_str),
-                    stop_time=convert_to_timezone(row["stop_time"], timezone_str),
-                    title=row["title"],
-                    description=row["description"]
+                    id=row.id,
+                    start_time=convert_to_timezone(row.start_time, timezone_str),
+                    stop_time=convert_to_timezone(row.stop_time, timezone_str),
+                    title=row.title,
+                    description=row.description
                 )
                 epg_data[channel_id].append(program)
-                existing_ids.add(row["id"])
+                existing_ids.add(row.id)
                 programs_added += 1
 
         # Re-sort by start_time after merging
@@ -213,11 +139,11 @@ def _merge_channel_programs(
         # First time seeing this channel - convert all timestamps
         programs = [
             ProgramResponse(
-                id=row["id"],
-                start_time=convert_to_timezone(row["start_time"], timezone_str),
-                stop_time=convert_to_timezone(row["stop_time"], timezone_str),
-                title=row["title"],
-                description=row["description"]
+                id=row.id,
+                start_time=convert_to_timezone(row.start_time, timezone_str),
+                stop_time=convert_to_timezone(row.stop_time, timezone_str),
+                title=row.title,
+                description=row.description
             )
             for row in rows
         ]
