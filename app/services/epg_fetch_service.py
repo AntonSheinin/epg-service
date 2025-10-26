@@ -163,6 +163,11 @@ async def _do_fetch() -> dict:
                     await store_channels(db, list(all_channels.values()))
                     logger.info(f"Channels prepared for storage")
 
+                    # Flush changes so channels are visible to subsequent queries
+                    logger.debug(f"Flushing channel changes to ensure foreign keys are available...")
+                    await db.flush()
+                    logger.debug(f"Channel flush complete")
+
                     logger.info(f"Storing programs...")
                     inserted_count = await store_programs(db, list(all_programs.values()))
                     logger.info(f"Programs prepared for storage")
