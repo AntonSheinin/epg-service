@@ -55,7 +55,7 @@ async def get_epg_data(db: AsyncSession, request: EPGRequest) -> EPGResponse:
     logger.info(f"EPG response: {len(channels_found_set)} channels found, {total_programs} programs, timezone={request.timezone}")
 
     return EPGResponse(
-        timestamp=convert_to_timezone(now.isoformat(), request.timezone),
+        timestamp=convert_to_timezone(now, request.timezone),
         timezone=request.timezone,
         channels_requested=len(request.channels),
         channels_found=len(channels_found_set),
@@ -86,15 +86,12 @@ async def _query_programs_for_channel(
     Returns:
         List of program rows that overlap the time window
     """
-    start_iso = start_time.isoformat()
-    end_iso = end_time.isoformat()
-
     stmt = (
         select(Program)
         .where(
             Program.xmltv_channel_id == channel_id,
-            Program.start_time < end_iso,  # Program starts before range ends
-            Program.stop_time > start_iso  # Program stops after range starts
+            Program.start_time < end_time,  # Program starts before range ends
+            Program.stop_time > start_time  # Program stops after range starts
         )
         .order_by(Program.start_time)
     )

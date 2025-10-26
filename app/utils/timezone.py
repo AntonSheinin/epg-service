@@ -57,27 +57,32 @@ def parse_iso8601_to_utc(date_str: str) -> datetime:
         raise DateFormatError(f"Invalid ISO8601 datetime format: '{date_str}'") from e
 
 
-def convert_to_timezone(utc_time_str: str, target_tz: str) -> str:
+def convert_to_timezone(utc_time: datetime | str, target_tz: str) -> str:
     """
     Convert UTC timestamp to target timezone
 
     Args:
-        utc_time_str: ISO8601 UTC timestamp
+        utc_time: ISO8601 UTC timestamp or datetime instance
         target_tz: Target timezone (IANA format or 'UTC')
 
     Returns:
         ISO8601 timestamp in target timezone
     """
-    dt = datetime.fromisoformat(utc_time_str)
+    if isinstance(utc_time, str):
+        dt = datetime.fromisoformat(utc_time)
+    else:
+        dt = utc_time
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
 
     if target_tz == "UTC":
         return dt.isoformat()
 
-    # Convert to target timezone
     target_zone = ZoneInfo(target_tz)
-    dt_target = dt.astimezone(target_zone)
-
-    return dt_target.isoformat()
+    return dt.astimezone(target_zone).isoformat()
 
 
 def calculate_time_window(request: "EPGRequest") -> tuple[datetime, datetime]:

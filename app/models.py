@@ -36,8 +36,8 @@ class Program(Base):
         ForeignKey("channels.xmltv_id", ondelete="CASCADE"),
         nullable=False
     )
-    start_time: Mapped[str] = mapped_column(String, nullable=False)
-    stop_time: Mapped[str] = mapped_column(String, nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stop_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

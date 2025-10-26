@@ -5,6 +5,7 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 ## Features
 
 - **Multi-source EPG fetching** - Fetch and merge data from multiple XMLTV sources
+- **Concurrent fetching pipeline** - Parallelizes source downloads while keeping database writes safe
 - **Date range filtering** - Query EPG with required from_date and to_date parameters
 - **Timezone support** - Convert timestamps to any IANA timezone
 - **Smart data merging** - Automatic deduplication across sources

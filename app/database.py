@@ -1,7 +1,9 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from collections.abc import AsyncIterator
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import event
 
 from app.config import settings
@@ -10,17 +12,15 @@ from app.models import Base
 logger = logging.getLogger(__name__)
 
 # Engine and session factory - initialized in init_db() during startup
-_engine = None
-_session_factory = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Database dependency for FastAPI"""
-    global _session_factory
-    if _session_factory is None:
-        raise RuntimeError("Database not initialized. Call init_db() during startup.")
+    session_factory = get_session_factory()
 
-    async with _session_factory() as session:
+    async with session_factory() as session:
         yield session
 
 
@@ -35,7 +35,7 @@ def _create_session_factory(engine):
     )
 
 
-def _get_session_factory():
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Get the session factory (initialized in init_db)"""
     global _session_factory
     if _session_factory is None:
@@ -87,3 +87,28 @@ async def close_db() -> None:
     if _engine:
         await _engine.dispose()
         logger.info("Database connections closed")
+
+
+@asynccontextmanager
+async def session_scope(*, begin: bool = True) -> AsyncIterator[AsyncSession]:
+    """
+    Provide an async session context manager with optional automatic transaction handling.
+
+    Args:
+        begin: When True (default), wrap the session in `session.begin()` for auto commit/rollback.
+               When False, caller is responsible for transaction demarcation and commit/rollback.
+    """
+    session_factory = get_session_factory()
+
+    async with session_factory() as session:
+        if begin:
+            async with session.begin():
+                yield session
+        else:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+            else:
+                await session.commit()

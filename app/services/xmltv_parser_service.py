@@ -5,11 +5,11 @@ import logging
 
 from lxml import etree # type: ignore
 
-from app.utils.data_merging import ChannelTuple, ProgramDict
+from app.services.fetch_types import ChannelPayload, ProgramPayload
 
 logger = logging.getLogger(__name__)
 
-def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list[ChannelTuple], list[ProgramDict]]:
+def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list[ChannelPayload], list[ProgramPayload]]:
     """
     Parse XMLTV file and return channels and programs
 
@@ -52,7 +52,7 @@ def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_
     return channels, programs
 
 
-def _parse_channels(root: etree._Element) -> list[ChannelTuple]:
+def _parse_channels(root: etree._Element) -> list[ChannelPayload]:
     """Extract channels from XMLTV root element"""
     channels = []
 
@@ -74,12 +74,16 @@ def _parse_channels(root: etree._Element) -> list[ChannelTuple]:
             except (AttributeError, TypeError):
                 logger.debug(f"Failed to extract icon URL from malformed icon element for channel {xmltv_id}")
 
-        channels.append((xmltv_id, display_name, icon_url))
+        channels.append(ChannelPayload(
+            xmltv_id=xmltv_id,
+            display_name=display_name,
+            icon_url=icon_url
+        ))
 
     return channels
 
 
-def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> list[ProgramDict]:
+def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> list[ProgramPayload]:
     """Extract programs from XMLTV root element"""
     programs = []
 
@@ -91,7 +95,7 @@ def _parse_programs(root: etree._Element, time_from: Optional[datetime], time_to
     return programs
 
 
-def _parse_single_program(programme: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> Optional[ProgramDict]:
+def _parse_single_program(programme: etree._Element, time_from: Optional[datetime], time_to: Optional[datetime]) -> Optional[ProgramPayload]:
     """Parse single programme element"""
     # Required fields
     channel_id = programme.get('channel')
@@ -117,17 +121,17 @@ def _parse_single_program(programme: etree._Element, time_from: Optional[datetim
     # Optional fields
     description = _get_text(programme, 'desc')
 
-    return {
-        'id': str(uuid4()),
-        'xmltv_channel_id': channel_id,
-        'start_time': start_time,
-        'stop_time': stop_time,
-        'title': title,
-        'description': description
-    }
+    return ProgramPayload(
+        id=str(uuid4()),
+        xmltv_channel_id=channel_id,
+        start_time=start_time,
+        stop_time=stop_time,
+        title=title,
+        description=description
+    )
 
 
-def _parse_xmltv_time(time_str: str) -> str:
+def _parse_xmltv_time(time_str: str) -> datetime:
     """
     Convert XMLTV time format to ISO8601 UTC
 
@@ -135,7 +139,7 @@ def _parse_xmltv_time(time_str: str) -> str:
         time_str: XMLTV time like '20080715003000 -0600'
 
     Returns:
-        ISO8601 UTC time like '2008-07-15T06:30:00+00:00'
+        Timezone-aware datetime in UTC
     """
     # Split time and timezone
     parts = time_str.strip().split()
@@ -154,20 +158,18 @@ def _parse_xmltv_time(time_str: str) -> str:
     # Convert to UTC
     dt_utc = dt - timedelta(minutes=tz_offset_minutes)
 
-    return dt_utc.replace(tzinfo=timezone.utc).isoformat()
+    return dt_utc.replace(tzinfo=timezone.utc)
 
 
-def _is_in_time_window(time_str: str, time_from: Optional[datetime], time_to: Optional[datetime]) -> bool:
+def _is_in_time_window(time_value: datetime, time_from: Optional[datetime], time_to: Optional[datetime]) -> bool:
     """Check if time is within the specified window"""
     if not time_from and not time_to:
         return True
 
-    dt = datetime.fromisoformat(time_str)
-
-    if time_from and dt < time_from:
+    if time_from and time_value < time_from:
         return False
 
-    if time_to and dt > time_to:
+    if time_to and time_value > time_to:
         return False
 
     return True

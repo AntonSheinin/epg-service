@@ -4,16 +4,20 @@ Database operations for EPG data
 This module contains all database CRUD operations for channels and programs.
 """
 import logging
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import datetime, timezone
 
-from sqlalchemy import func, select, delete
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Channel, Program
-from app.utils.data_merging import ChannelTuple, ProgramDict
+from app.services.fetch_types import ChannelPayload, ProgramPayload
 
 
 logger = logging.getLogger(__name__)
+
 
 async def delete_old_programs(db: AsyncSession, cutoff_time: datetime) -> int:
     """
@@ -26,139 +30,121 @@ async def delete_old_programs(db: AsyncSession, cutoff_time: datetime) -> int:
     Returns:
         Number of deleted programs
     """
-    cutoff_iso = cutoff_time.isoformat()
+    result = await db.execute(
+        select(func.count(Program.id)).where(Program.start_time < cutoff_time)
+    )
+    deleted_count = result.scalar_one_or_none() or 0
 
-    # Get count before deletion
-    result = await db.execute(select(func.count(Program.id)).where(Program.start_time < cutoff_iso))
-    deleted_count = result.scalar() or 0
-
-    # Delete programs using delete statement
-    stmt = delete(Program).where(Program.start_time < cutoff_iso)
+    stmt = delete(Program).where(Program.start_time < cutoff_time)
     await db.execute(stmt)
-    await db.commit()
 
-    logger.info(f"Deleted {deleted_count} old programs (before {cutoff_time.date()})")
+    logger.info("Deleted %s old programs (start_time < %s)", deleted_count, cutoff_time.date())
     return deleted_count
 
 
-async def store_channels(db: AsyncSession, channels: list[ChannelTuple]) -> None:
+async def store_channels(db: AsyncSession, channels: Sequence[ChannelPayload]) -> None:
     """
-    Store channels in database using SQLAlchemy ORM merge operation.
-
-    Note: This function does NOT commit the transaction. The caller must handle
-    transaction management using async context managers (db.begin()).
+    Store channels in database using UPSERT semantics for immediate availability.
 
     Args:
         db: Database session
-        channels: List of channel tuples (xmltv_id, display_name, icon_url)
+        channels: Iterable of ChannelPayload objects
     """
+    channels = list(channels)
     if not channels:
         logger.debug("No channels to store")
         return
 
-    logger.info(f"Starting to store {len(channels)} channels...")
-    logger.debug(f"  First 3 channels: {[ch[0] for ch in channels[:3]]}")
+    logger.info("Storing %s channels", len(channels))
+    channel_values = [
+        {
+            "xmltv_id": channel.xmltv_id,
+            "display_name": channel.display_name,
+            "icon_url": channel.icon_url,
+        }
+        for channel in channels
+    ]
 
-    # Create Channel ORM objects and add them to the session
-    # On duplicate xmltv_id (primary key), SQLite will replace the row
-    channels_to_add = []
-    for xmltv_id, display_name, icon_url in channels:
-        try:
-            channel = Channel(
-                xmltv_id=xmltv_id,
-                display_name=display_name,
-                icon_url=icon_url
-            )
-            channels_to_add.append(channel)
-        except Exception as e:
-            logger.error(f"Error creating channel {xmltv_id}: {e}")
-            raise
+    stmt = sqlite_insert(Channel).values(channel_values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["xmltv_id"],
+        set_={
+            "display_name": stmt.excluded.display_name,
+            "icon_url": func.coalesce(stmt.excluded.icon_url, Channel.icon_url),
+        },
+    )
 
-    logger.debug(f"Adding {len(channels_to_add)} channel objects to session...")
-    db.add_all(channels_to_add)
-    logger.info(f"Prepared {len(channels)} channels for storage")
+    await db.execute(stmt)
+    logger.debug("Channel upsert complete")
 
 
-async def store_programs(db: AsyncSession, programs: list[ProgramDict]) -> int:
+async def store_programs(db: AsyncSession, programs: Sequence[ProgramPayload]) -> int:
     """
-    Store programs in database using batch operations for efficiency.
-
-    Instead of checking each program individually (N+1 queries), this loads all
-    existing IDs in one query and then batch inserts new programs.
-
-    Note: This function does NOT commit the transaction. The caller must handle
-    transaction management using async context managers (db.begin()).
+    Store programs in database using batch upserts with ON CONFLICT DO NOTHING.
 
     Args:
         db: Database session
-        programs: List of program dictionaries
+        programs: Iterable of ProgramPayload objects
 
     Returns:
-        Number of programs actually inserted (excluding duplicates)
+        Number of programs successfully inserted
     """
-    if not programs:
+    program_list = list(programs)
+    if not program_list:
         logger.debug("No programs to store")
         return 0
 
-    logger.info(f"Starting to store {len(programs)} programs...")
+    total_programs = len(program_list)
+    logger.info("Storing %s programs", total_programs)
 
-    # Step 1: Build a set of existing program keys based on the UNIQUE constraint:
-    # (xmltv_channel_id, start_time, title)
-    logger.debug(f"Querying for existing programs using constraint keys...")
-    existing_result = await db.execute(
-        select(Program.xmltv_channel_id, Program.start_time, Program.title).select_from(Program)
-    )
-    existing_keys = set()
-    for row in existing_result.fetchall():
-        # Create a tuple key: (channel, start_time, title)
-        existing_keys.add((row[0], row[1], row[2]))
-    logger.info(f"Found {len(existing_keys)} existing programs in database")
+    chunk_size = 4000
+    inserted_count = 0
+    duplicates = 0
 
-    # Step 2: Create Program objects only for new programs
-    new_programs = []
-    skipped_invalid = 0
-    skipped_duplicate = 0
+    for start_index in range(0, total_programs, chunk_size):
+        chunk = program_list[start_index:start_index + chunk_size]
+        now = datetime.now(timezone.utc)
+        payload = [
+            {
+                "id": program.id,
+                "xmltv_channel_id": program.xmltv_channel_id,
+                "start_time": program.start_time,
+                "stop_time": program.stop_time,
+                "title": program.title,
+                "description": program.description,
+                "created_at": program.created_at or now,
+            }
+            for program in chunk
+        ]
 
-    logger.debug(f"Creating Program objects for new programs...")
-    for program_dict in programs:
-        # Create the constraint key for this program
-        program_key = (
-            program_dict['xmltv_channel_id'],
-            program_dict['start_time'],
-            program_dict['title']
+        stmt = sqlite_insert(Program).values(payload)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["xmltv_channel_id", "start_time", "title"]
         )
-
-        # Skip if this program already exists
-        if program_key in existing_keys:
-            skipped_duplicate += 1
-            continue
+        stmt = stmt.returning(Program.id)
 
         try:
-            new_programs.append(Program(
-                id=program_dict['id'],
-                xmltv_channel_id=program_dict['xmltv_channel_id'],
-                start_time=program_dict['start_time'],
-                stop_time=program_dict['stop_time'],
-                title=program_dict['title'],
-                description=program_dict.get('description')
-            ))
-        except (ValueError, TypeError, KeyError) as e:
-            # Skip programs with invalid data types or missing keys
-            skipped_invalid += 1
-            logger.warning(f"Skipping program with invalid data - {program_dict.get('id', 'unknown')}: {type(e).__name__}: {e}")
-        except Exception as e:
-            # Log unexpected exceptions with full context
-            logger.error(f"Unexpected error processing program {program_dict.get('id', 'unknown')}: {e}", exc_info=True)
-            skipped_invalid += 1
+            result = await db.execute(stmt)
+        except IntegrityError as exc:
+            logger.error("Integrity error while inserting programs: %s", exc, exc_info=True)
+            continue
 
-    logger.info(f"Created {len(new_programs)} valid Program objects, {skipped_duplicate} duplicates skipped, {skipped_invalid} invalid programs skipped")
+        inserted_ids = result.scalars().all()
+        chunk_inserted = len(inserted_ids)
 
-    # Step 3: Batch insert all new programs (one operation)
-    if new_programs:
-        logger.debug(f"Batch inserting {len(new_programs)} programs into session...")
-        db.add_all(new_programs)
-        logger.info(f"Prepared {len(new_programs)} new programs for storage (awaiting transaction commit)...")
+        inserted_count += chunk_inserted
+        duplicates += len(chunk) - chunk_inserted
 
-    logger.info(f"Store preparation complete: {len(new_programs)} new programs staged, {skipped_duplicate} duplicates skipped, {skipped_invalid} invalid programs skipped")
+        logger.debug(
+            "Inserted %s programs in current chunk (%s duplicates ignored)",
+            chunk_inserted,
+            len(chunk) - chunk_inserted,
+        )
 
-    return len(new_programs)
+    logger.info(
+        "Program store complete: %s inserted, %s ignored due to duplicates",
+        inserted_count,
+        duplicates,
+    )
+
+    return inserted_count
