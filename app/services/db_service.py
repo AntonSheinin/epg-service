@@ -42,6 +42,29 @@ async def delete_old_programs(db: AsyncSession, cutoff_time: datetime) -> int:
     return deleted_count
 
 
+async def delete_future_programs(db: AsyncSession, cutoff_time: datetime) -> int:
+    """
+    Delete programs scheduled after the specified cutoff.
+
+    Args:
+        db: Database session
+        cutoff_time: Remove programs with start_time greater than this value
+
+    Returns:
+        Number of deleted programs
+    """
+    result = await db.execute(
+        select(func.count(Program.id)).where(Program.start_time > cutoff_time)
+    )
+    deleted_count = result.scalar_one_or_none() or 0
+
+    stmt = delete(Program).where(Program.start_time > cutoff_time)
+    await db.execute(stmt)
+
+    logger.info("Deleted %s future programs (start_time > %s)", deleted_count, cutoff_time.date())
+    return deleted_count
+
+
 async def store_channels(db: AsyncSession, channels: Sequence[ChannelPayload]) -> None:
     """
     Store channels in database using UPSERT semantics for immediate availability.
@@ -118,8 +141,13 @@ async def store_programs(db: AsyncSession, programs: Sequence[ProgramPayload]) -
         ]
 
         stmt = sqlite_insert(Program).values(payload)
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=["xmltv_channel_id", "start_time", "title"]
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["xmltv_channel_id", "start_time", "title"],
+            set_={
+                "stop_time": stmt.excluded.stop_time,
+                "description": stmt.excluded.description,
+                "created_at": func.coalesce(Program.created_at, stmt.excluded.created_at),
+            },
         )
         stmt = stmt.returning(Program.id)
 

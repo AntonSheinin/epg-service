@@ -13,7 +13,12 @@ from typing import Literal, Sequence
 
 from app.config import settings
 from app.database import session_scope
-from app.services.db_service import delete_old_programs, store_channels, store_programs
+from app.services.db_service import (
+    delete_future_programs,
+    delete_old_programs,
+    store_channels,
+    store_programs,
+)
 from app.services.epg_downloader_service import process_single_source
 from app.services.fetch_types import ChannelPayload, ProgramPayload
 
@@ -27,9 +32,10 @@ _fetch_lock = asyncio.Lock()
 @dataclass(slots=True)
 class FetchContext:
     started_at: datetime
+    window_start: datetime
+    window_end: datetime
     archive_cutoff: datetime
-    fetch_start: datetime
-    fetch_end: datetime
+    future_cutoff: datetime
 
 
 @dataclass(slots=True)
@@ -77,44 +83,67 @@ class EPGFetchPipeline:
         self.total_sources = len(self.sources)
         self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
         self._semaphore = asyncio.Semaphore(self._concurrency)
+        self._parse_timeout = settings.epg_parse_timeout_seconds
 
     async def run(self) -> dict:
         context = self._build_context()
         logger.info(
-            "Time boundaries - Archive cutoff: %s, Fetch window: %s -> %s",
-            context.archive_cutoff.date(),
-            context.fetch_start.isoformat(),
-            context.fetch_end.isoformat(),
+            "Target window: %s -> %s (archive depth: %s days, future limit: %s days)",
+            context.window_start.isoformat(),
+            context.window_end.isoformat(),
+            settings.max_epg_depth,
+            settings.max_future_epg_limit,
+        )
+        logger.info(
+            "XML parsing timeout per source: %s",
+            f"{self._parse_timeout}s" if self._parse_timeout else "disabled",
         )
 
-        deleted_count = await self._cleanup_old_programs(context.archive_cutoff)
+        deleted_past, deleted_future = await self._trim_program_window(context)
         summaries = await self._collect_sources(context)
         programs_inserted = await self._persist_sources(summaries)
 
-        return self._build_result(context, deleted_count, programs_inserted, summaries)
+        return self._build_result(
+            context,
+            deleted_past,
+            deleted_future,
+            programs_inserted,
+            summaries,
+        )
 
     def _build_context(self) -> FetchContext:
         started_at = datetime.now(timezone.utc)
-        archive_cutoff = started_at - timedelta(days=settings.max_epg_depth)
-        fetch_start = started_at.replace(hour=0, minute=0, second=0, microsecond=0)
-        fetch_end = started_at + timedelta(days=settings.max_future_epg_limit)
+        past_window_start = started_at - timedelta(days=settings.max_epg_depth)
+        window_start = past_window_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        future_window_end = started_at + timedelta(days=settings.max_future_epg_limit)
+        window_end = future_window_end.replace(hour=23, minute=59, second=59, microsecond=999999)
         return FetchContext(
             started_at=started_at,
-            archive_cutoff=archive_cutoff,
-            fetch_start=fetch_start,
-            fetch_end=fetch_end,
+            window_start=window_start,
+            window_end=window_end,
+            archive_cutoff=window_start,
+            future_cutoff=window_end,
         )
 
-    async def _cleanup_old_programs(self, cutoff_time: datetime) -> int:
-        logger.info("Deleting programs before %s...", cutoff_time.date())
+    async def _trim_program_window(self, context: FetchContext) -> tuple[int, int]:
+        logger.info(
+            "Trimming programs outside target window: (< %s) and (> %s)",
+            context.archive_cutoff.isoformat(),
+            context.future_cutoff.isoformat(),
+        )
         try:
             async with session_scope() as session:
-                deleted = await delete_old_programs(session, cutoff_time)
+                deleted_past = await delete_old_programs(session, context.archive_cutoff)
+                deleted_future = await delete_future_programs(session, context.future_cutoff)
         except RuntimeError as exc:
             logger.error("Database not initialized: %s", exc)
             raise
-        logger.info("Deleted %s old programs", deleted)
-        return deleted
+        logger.info(
+            "Deleted %s old programs and %s future programs outside window",
+            deleted_past,
+            deleted_future,
+        )
+        return deleted_past, deleted_future
 
     async def _collect_sources(self, context: FetchContext) -> list[SourceSummary]:
         if not self.sources:
@@ -156,8 +185,9 @@ class EPGFetchPipeline:
                 channels, programs = await process_single_source(
                     source_url,
                     index,
-                    context.fetch_start,
-                    context.fetch_end,
+                    context.window_start,
+                    context.window_end,
+                    parse_timeout_seconds=self._parse_timeout
                 )
             except Exception as exc:
                 completed_at = datetime.now(timezone.utc)
@@ -247,7 +277,8 @@ class EPGFetchPipeline:
     def _build_result(
         self,
         context: FetchContext,
-        deleted_count: int,
+        deleted_past_count: int,
+        deleted_future_count: int,
         inserted_count: int,
         summaries: list[SourceSummary],
     ) -> dict:
@@ -261,9 +292,13 @@ class EPGFetchPipeline:
             "sources_succeeded": successes,
             "sources_failed": failures,
             "programs_inserted": inserted_count,
-            "programs_deleted": deleted_count,
+            "programs_deleted": deleted_past_count + deleted_future_count,
+            "programs_deleted_past": deleted_past_count,
+            "programs_deleted_future": deleted_future_count,
             "source_details": [summary.to_dict() for summary in summaries],
             "started_at": context.started_at.isoformat(),
+            "window_start": context.window_start.isoformat(),
+            "window_end": context.window_end.isoformat(),
         }
 
 

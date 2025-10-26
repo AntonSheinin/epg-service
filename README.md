@@ -100,6 +100,9 @@ MAX_EPG_DEPTH=14
 
 # Future EPG limit (days to keep future programs)
 MAX_FUTURE_EPG_LIMIT=7
+
+# XML parsing timeout in seconds (set 0 to disable timeout)
+EPG_PARSE_TIMEOUT_SECONDS=600
 ```
 
 **Cron Examples:**

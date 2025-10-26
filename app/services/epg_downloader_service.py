@@ -21,7 +21,8 @@ async def process_single_source(
     source_url: str,
     source_index: int,
     time_from: datetime,
-    time_to: datetime
+    time_to: datetime,
+    parse_timeout_seconds: int | None = None
 ) -> tuple[list[ChannelPayload], list[ProgramPayload]]:
     """
     Download and parse a single EPG source
@@ -34,6 +35,9 @@ async def process_single_source(
 
     Returns:
         Tuple of (channels, programs)
+
+    Keyword Args:
+        parse_timeout_seconds: Timeout in seconds for parsing (0/None disables timeout)
     """
     temp_file = None
     try:
@@ -47,7 +51,12 @@ async def process_single_source(
         # Parse
         logger.info(f"  [Source {source_index}] Parsing XMLTV content...")
         logger.debug(f"  [Source {source_index}] Starting async parsing with timeout protection...")
-        channels, programs = await parse_xmltv_async(temp_file, time_from, time_to)
+        channels, programs = await parse_xmltv_async(
+            temp_file,
+            time_from,
+            time_to,
+            parse_timeout_seconds=parse_timeout_seconds
+        )
         logger.info(f"  [Source {source_index}] Parsing complete: {len(channels)} channels, {len(programs)} programs")
         logger.debug(f"  [Source {source_index}] Channel IDs (first 5): {[ch.xmltv_id for ch in channels[:5]]}")
 
@@ -65,7 +74,9 @@ async def process_single_source(
 async def parse_xmltv_async(
     file_path: Path | str,
     time_from: datetime,
-    time_to: datetime
+    time_to: datetime,
+    *,
+        parse_timeout_seconds: int | None = None
 ) -> tuple[list[ChannelPayload], list[ProgramPayload]]:
     """
     Parse XMLTV file asynchronously with timeout protection.
@@ -81,6 +92,9 @@ async def parse_xmltv_async(
     Returns:
         Tuple of (channels, programs)
 
+    Keyword Args:
+        parse_timeout_seconds: Timeout in seconds for parsing (0/None disables timeout)
+
     Raises:
         ValueError: If no channels/programs found or parsing times out
         asyncio.TimeoutError: If parsing exceeds timeout
@@ -92,19 +106,26 @@ async def parse_xmltv_async(
     logger.debug(f"  File size: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
     logger.debug(f"  Time window filter: {time_from.isoformat()} to {time_to.isoformat()}")
 
+    effective_timeout = parse_timeout_seconds if parse_timeout_seconds and parse_timeout_seconds > 0 else None
+
     try:
         loop = asyncio.get_running_loop()
-        logger.debug("Offloading XML parsing to thread pool executor (timeout: 5 minutes)...")
-        channels, programs = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                parse_xmltv_file,
-                str(file_path),
-                time_from,
-                time_to
-            ),
-            timeout=300  # 5 minutes max for XML parsing
+        timeout_display = f"{effective_timeout}s" if effective_timeout else "disabled"
+        logger.debug("Offloading XML parsing to thread pool executor (timeout: %s)...", timeout_display)
+        parse_task = loop.run_in_executor(
+            None,
+            parse_xmltv_file,
+            str(file_path),
+            time_from,
+            time_to
         )
+        if effective_timeout:
+            channels, programs = await asyncio.wait_for(
+                parse_task,
+                timeout=effective_timeout
+            )
+        else:
+            channels, programs = await parse_task
         logger.info(f"XML parsing completed successfully: {len(channels)} channels, {len(programs)} programs")
         logger.debug(
             "  Parsed channels: %s%s",
@@ -112,7 +133,11 @@ async def parse_xmltv_async(
             "..." if len(channels) > 3 else "",
         )
     except asyncio.TimeoutError:
-        logger.error(f"XML parsing timed out after 5 minutes for {file_path}")
+        logger.error(
+            "XML parsing timed out after %s for %s",
+            timeout_display,
+            file_path
+        )
         raise ValueError("XML parsing timed out - file may be too large or malformed")
 
     if not channels:
