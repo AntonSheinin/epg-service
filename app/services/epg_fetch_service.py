@@ -218,6 +218,24 @@ class EPGFetchPipeline:
             len(programs),
         )
 
+        # Ensure we have channel metadata for every program to satisfy FK constraints
+        channel_ids = {channel.xmltv_id for channel in channels}
+        missing_channels = {
+            program.xmltv_channel_id for program in programs if program.xmltv_channel_id not in channel_ids
+        }
+        if missing_channels:
+            logger.warning(
+                "[Source %s] %s program(s) reference %s missing channel(s); generating fallback entries",
+                index,
+                len(programs),
+                len(missing_channels),
+            )
+            fallback_channels = [
+                ChannelPayload(xmltv_id=channel_id, display_name=channel_id, icon_url=None)
+                for channel_id in sorted(missing_channels)
+            ]
+            channels.extend(fallback_channels)
+
         return SourceSummary(
             index=index,
             source_url=source_url,
