@@ -59,9 +59,9 @@ async def store_channels(db: AsyncSession, channels: list[ChannelTuple]) -> None
     logger.info(f"Starting to store {len(channels)} channels...")
     logger.debug(f"  First 3 channels: {[ch[0] for ch in channels[:3]]}")
 
-    # Create Channel ORM objects and merge them into the session
-    # merge() handles INSERT OR REPLACE semantics for SQLite
-    stored_count = 0
+    # Create Channel ORM objects and add them to the session
+    # On duplicate xmltv_id (primary key), SQLite will replace the row
+    channels_to_add = []
     for xmltv_id, display_name, icon_url in channels:
         try:
             channel = Channel(
@@ -69,13 +69,13 @@ async def store_channels(db: AsyncSession, channels: list[ChannelTuple]) -> None
                 display_name=display_name,
                 icon_url=icon_url
             )
-            await db.merge(channel)
-            stored_count += 1
+            channels_to_add.append(channel)
         except Exception as e:
-            logger.error(f"Error storing channel {xmltv_id}: {e}")
+            logger.error(f"Error creating channel {xmltv_id}: {e}")
             raise
 
-    logger.debug(f"Merged {stored_count} channel objects into session (awaiting transaction commit)...")
+    logger.debug(f"Adding {len(channels_to_add)} channel objects to session...")
+    db.add_all(channels_to_add)
     logger.info(f"Prepared {len(channels)} channels for storage")
 
 
