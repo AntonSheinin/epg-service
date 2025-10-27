@@ -104,10 +104,10 @@ def _parse_single_program(programme: etree._Element, time_from: Optional[datetim
     title_text = _get_text(programme, 'title')
 
     # Skip if missing required fields
-    if not all([channel_id, start_str, stop_str, title_text]):
+    if not channel_id or not start_str or not stop_str or title_text is None:
         return None
 
-    title = title_text  # narrow type to str
+    title: str = title_text
 
     # Parse times (skip invalid formats)
     try:
