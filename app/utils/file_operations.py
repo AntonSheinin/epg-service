@@ -32,6 +32,7 @@ async def get_http_client() -> httpx.AsyncClient:
             if _http_client is None:
                 _http_client = httpx.AsyncClient(timeout=120)
                 logger.debug("HTTP client initialized for connection pooling")
+    assert _http_client is not None  # For type checkers
     return _http_client
 
 
@@ -109,6 +110,7 @@ async def download_file(url: str, filename: str) -> Path:
                 logger.error(f"Download failed after 3 attempts: HTTP {e.response.status_code} {e.response.reason_phrase}")
                 raise
 
+    raise httpx.HTTPError(f"Failed to download {url} after 3 attempts")
 
 def cleanup_temp_file(file_path: Path) -> bool:
     """

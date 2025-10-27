@@ -83,7 +83,7 @@ class EPGFetchPipeline:
         self.total_sources = len(self.sources)
         self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
         self._semaphore = asyncio.Semaphore(self._concurrency)
-        self._parse_timeout = settings.epg_parse_timeout_seconds
+        self._parse_timeout = settings.epg_parse_timeout_sec
 
     async def run(self) -> dict:
         context = self._build_context()

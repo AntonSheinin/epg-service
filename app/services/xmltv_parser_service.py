@@ -76,7 +76,7 @@ def _parse_channels(root: etree._Element) -> list[ChannelPayload]:
 
         channels.append(ChannelPayload(
             xmltv_id=xmltv_id,
-            display_name=display_name,
+            display_name=display_name or xmltv_id,
             icon_url=icon_url
         ))
 
@@ -101,11 +101,13 @@ def _parse_single_program(programme: etree._Element, time_from: Optional[datetim
     channel_id = programme.get('channel')
     start_str = programme.get('start')
     stop_str = programme.get('stop')
-    title = _get_text(programme, 'title')
+    title_text = _get_text(programme, 'title')
 
     # Skip if missing required fields
-    if not all([channel_id, start_str, stop_str, title]):
+    if not all([channel_id, start_str, stop_str, title_text]):
         return None
+
+    title = title_text  # narrow type to str
 
     # Parse times (skip invalid formats)
     try:

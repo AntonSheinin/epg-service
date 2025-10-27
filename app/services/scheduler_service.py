@@ -36,7 +36,11 @@ class EPGScheduler:
         self.scheduler.add_job(self._fetch_job, trigger=trigger, id='epg_fetch')
 
         self.scheduler.start()
-        logger.info(f"Scheduler started. Next fetch: {self.scheduler.get_job('epg_fetch').next_run_time}")
+        next_time = self.get_next_run_time()
+        logger.info(
+            "Scheduler started. Next fetch: %s",
+            next_time.isoformat() if next_time else "unknown"
+        )
 
     def shutdown(self) -> None:
         """Shutdown the scheduler"""

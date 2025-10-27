@@ -18,7 +18,7 @@ class CustomSettings(BaseSettings):
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
     max_epg_depth: int = 14  # Days to keep past programs (archive)
     max_future_epg_limit: int = 7 # Days to keep future epg
-    epg_parse_timeout_seconds: int = 600  # XML parsing timeout, 0 disables timeout
+    epg_parse_timeout_sec: int = 600  # XML parsing timeout, 0 disables timeout
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -115,7 +115,7 @@ class CustomSettings(BaseSettings):
         logger.info(f"  Fetch Schedule: {self.epg_fetch_cron}")
         logger.info(f"  Archive Depth: {self.max_epg_depth} days")
         logger.info(f"  Future Limit: {self.max_future_epg_limit} days")
-        logger.info(f"  Parse Timeout: {self.epg_parse_timeout_seconds or 'disabled'} seconds")
+        logger.info(f"  Parse Timeout: {self.epg_parse_timeout_sec or 'disabled'} seconds")
 
 
 settings = CustomSettings()
