@@ -41,9 +41,6 @@ async def get_epg_data(db: AsyncSession, request: EPGRequest) -> EPGResponse:
 
     # Process each channel request
     for channel in request.channels:
-
-        logger.info(f"Fetching EPG for {channel.xmltv_id}: {start_time.isoformat()} to {end_time.isoformat()}")
-
         programs = await _query_programs_for_channel(db, channel.xmltv_id, start_time, end_time)
 
         if programs:
