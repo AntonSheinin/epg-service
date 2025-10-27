@@ -7,7 +7,7 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -65,6 +65,23 @@ async def delete_future_programs(db: AsyncSession, cutoff_time: datetime) -> int
     return deleted_count
 
 
+async def _drop_program_time_index(db: AsyncSession) -> None:
+    """Drop the program time index before bulk insert to avoid repetitive rebuilds."""
+    await db.execute(text("DROP INDEX IF EXISTS idx_programs_channel_time"))
+    logger.debug("Dropped idx_programs_channel_time prior to bulk insert")
+
+
+async def _create_program_time_index(db: AsyncSession) -> None:
+    """Recreate the program time index after bulk insert completes."""
+    await db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_programs_channel_time "
+            "ON programs (xmltv_channel_id, start_time)"
+        )
+    )
+    logger.debug("Recreated idx_programs_channel_time after bulk insert")
+
+
 async def store_channels(db: AsyncSession, channels: Sequence[ChannelPayload]) -> None:
     """
     Store channels in database using UPSERT semantics for immediate availability.
@@ -120,59 +137,69 @@ async def store_programs(db: AsyncSession, programs: Sequence[ProgramPayload]) -
     total_programs = len(program_list)
     logger.info("Storing %s programs", total_programs)
 
-    chunk_size = 4000
+    chunk_size = 20000
     inserted_count = 0
     duplicates = 0
+    index_dropped = False
 
-    for start_index in range(0, total_programs, chunk_size):
-        chunk = program_list[start_index:start_index + chunk_size]
-        now = datetime.now(timezone.utc)
-        payload = [
-            {
-                "id": program.id,
-                "xmltv_channel_id": program.xmltv_channel_id,
-                "start_time": program.start_time,
-                "stop_time": program.stop_time,
-                "title": program.title,
-                "description": program.description,
-                "created_at": program.created_at or now,
-            }
-            for program in chunk
-        ]
+    try:
+        if program_list:
+            try:
+                await _drop_program_time_index(db)
+                index_dropped = True
+            except Exception as exc:
+                logger.warning("Could not drop idx_programs_channel_time: %s", exc, exc_info=True)
 
-        stmt = sqlite_insert(Program).values(payload)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["xmltv_channel_id", "start_time", "title"],
-            set_={
-                "stop_time": stmt.excluded.stop_time,
-                "description": stmt.excluded.description,
-                "created_at": func.coalesce(Program.created_at, stmt.excluded.created_at),
-            },
+        for start_index in range(0, total_programs, chunk_size):
+            chunk = program_list[start_index:start_index + chunk_size]
+            now = datetime.now(timezone.utc)
+            payload = [
+                {
+                    "id": program.id,
+                    "xmltv_channel_id": program.xmltv_channel_id,
+                    "start_time": program.start_time,
+                    "stop_time": program.stop_time,
+                    "title": program.title,
+                    "description": program.description,
+                    "created_at": program.created_at or now,
+                }
+                for program in chunk
+            ]
+
+            stmt = sqlite_insert(Program).values(payload)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["xmltv_channel_id", "start_time", "title"]
+            )
+            stmt = stmt.returning(Program.id)
+
+            try:
+                result = await db.execute(stmt)
+            except IntegrityError as exc:
+                logger.error("Integrity error while inserting programs: %s", exc, exc_info=True)
+                continue
+
+            inserted_ids = result.scalars().all()
+            chunk_inserted = len(inserted_ids)
+
+            inserted_count += chunk_inserted
+            duplicates += len(chunk) - chunk_inserted
+
+            logger.debug(
+                "Inserted %s programs in current chunk (%s duplicates ignored)",
+                chunk_inserted,
+                len(chunk) - chunk_inserted,
+            )
+
+        logger.info(
+            "Program store complete: %s inserted, %s ignored due to duplicates",
+            inserted_count,
+            duplicates,
         )
-        stmt = stmt.returning(Program.id)
 
-        try:
-            result = await db.execute(stmt)
-        except IntegrityError as exc:
-            logger.error("Integrity error while inserting programs: %s", exc, exc_info=True)
-            continue
-
-        inserted_ids = result.scalars().all()
-        chunk_inserted = len(inserted_ids)
-
-        inserted_count += chunk_inserted
-        duplicates += len(chunk) - chunk_inserted
-
-        logger.debug(
-            "Inserted %s programs in current chunk (%s duplicates ignored)",
-            chunk_inserted,
-            len(chunk) - chunk_inserted,
-        )
-
-    logger.info(
-        "Program store complete: %s inserted, %s ignored due to duplicates",
-        inserted_count,
-        duplicates,
-    )
-
-    return inserted_count
+        return inserted_count
+    finally:
+        if index_dropped:
+            try:
+                await _create_program_time_index(db)
+            except Exception as exc:
+                logger.error("Failed to recreate idx_programs_channel_time: %s", exc, exc_info=True)
