@@ -75,12 +75,12 @@ class CustomSettings(BaseSettings):
             raise ValueError(f"{info.field_name} must be <= 365 days")
         return v
 
-    @field_validator('epg_parse_timeout_seconds')
+    @field_validator('epg_parse_timeout_sec')
     @classmethod
     def validate_parse_timeout(cls, v: int) -> int:
         """Validate XML parsing timeout (seconds)"""
         if v < 0:
-            raise ValueError("epg_parse_timeout_seconds must be >= 0")
+            raise ValueError("epg_parse_timeout_sec must be >= 0")
         return v
 
     @field_validator('epg_fetch_cron')
