@@ -31,9 +31,20 @@ class EPGScheduler:
             logger.warning("Scheduler already running")
             return
 
+        try:
+            trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
+        except (ValueError, KeyError) as exc:
+            logger.error("Invalid cron expression '%s': %s", settings.epg_fetch_cron, exc)
+            raise
+
         self.scheduler = AsyncIOScheduler(timezone='UTC')
-        trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
-        self.scheduler.add_job(self._fetch_job, trigger=trigger, id='epg_fetch')
+        self.scheduler.add_job(
+            self._fetch_job,
+            trigger=trigger,
+            id='epg_fetch',
+            max_instances=1,
+            coalesce=True
+        )
 
         self.scheduler.start()
         next_time = self.get_next_run_time()
@@ -47,6 +58,7 @@ class EPGScheduler:
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Scheduler stopped")
+            self.scheduler = None
 
     def get_next_run_time(self) -> datetime | None:
         """Get next scheduled fetch time"""
