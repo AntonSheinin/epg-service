@@ -11,11 +11,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Sequence
 
+from sqlalchemy import select
+
 from app.config import settings
 from app.database import session_scope
+from app.models import Program
 from app.services.db_service import (
     delete_future_programs,
     delete_old_programs,
+    finalize_program_bulk_insert,
+    prepare_program_bulk_insert,
     store_channels,
     store_programs,
 )
@@ -101,7 +106,7 @@ class EPGFetchPipeline:
 
         deleted_past, deleted_future = await self._trim_program_window(context)
         summaries = await self._collect_sources(context)
-        programs_inserted = await self._persist_sources(summaries)
+        programs_inserted = await self._persist_sources(context, summaries)
 
         return self._build_result(
             context,
@@ -249,8 +254,31 @@ class EPGFetchPipeline:
             programs=list(programs),
         )
 
-    async def _persist_sources(self, summaries: list[SourceSummary]) -> int:
+    async def _load_existing_program_ids(self, context: FetchContext) -> set[str]:
+        """Load existing program identifiers within the active window for deduplication."""
+        async with session_scope() as session:
+            result = await session.execute(
+                select(Program.id).where(
+                    Program.start_time >= context.window_start,
+                    Program.start_time <= context.window_end,
+                )
+            )
+            existing_ids = set(result.scalars().all())
+        return existing_ids
+
+    async def _persist_sources(
+        self,
+        context: FetchContext,
+        summaries: list[SourceSummary],
+    ) -> int:
+        existing_program_ids = await self._load_existing_program_ids(context)
+        logger.info(
+            "Loaded %s existing program IDs for duplicate filtering",
+            len(existing_program_ids),
+        )
+
         total_inserted = 0
+        bulk_prepared = False
         for summary in summaries:
             if summary.status != "success":
                 continue
@@ -262,10 +290,38 @@ class EPGFetchPipeline:
                 summary.programs_parsed,
             )
 
+            inserted = 0
             try:
-                async with session_scope() as session:
-                    await store_channels(session, summary.channels)
-                    inserted = await store_programs(session, summary.programs)
+                async with session_scope(begin=False) as session:
+                    prepared_this_session = False
+                    try:
+                        await prepare_program_bulk_insert(
+                            session,
+                            drop_index=not bulk_prepared,
+                        )
+                        prepared_this_session = True
+                        bulk_prepared = True
+
+                        await store_channels(session, summary.channels)
+                        inserted = await store_programs(
+                            session,
+                            summary.programs,
+                            existing_program_ids,
+                        )
+                    finally:
+                        if prepared_this_session:
+                            try:
+                                await finalize_program_bulk_insert(
+                                    session,
+                                    rebuild_index=False,
+                                )
+                            except Exception as finalize_exc:
+                                logger.error(
+                                    "[Source %s] Failed to reset PRAGMAs after bulk insert: %s",
+                                    summary.index,
+                                    finalize_exc,
+                                    exc_info=True,
+                                )
             except Exception as exc:
                 logger.error(
                     "[Source %s] Failed to store data: %s",
@@ -276,6 +332,14 @@ class EPGFetchPipeline:
                 summary.status = "failed"
                 summary.error = str(exc)
                 summary.programs_inserted = 0
+                try:
+                    existing_program_ids = await self._load_existing_program_ids(context)
+                except Exception as refresh_exc:
+                    logger.error(
+                        "Failed to refresh existing program cache after rollback: %s",
+                        refresh_exc,
+                        exc_info=True,
+                    )
                 continue
 
             summary.programs_inserted = inserted
@@ -289,6 +353,21 @@ class EPGFetchPipeline:
 
             summary.channels.clear()
             summary.programs.clear()
+
+        if bulk_prepared:
+            try:
+                async with session_scope(begin=False) as session:
+                    await finalize_program_bulk_insert(
+                        session,
+                        rebuild_index=True,
+                        checkpoint=True,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Failed to finalize bulk program insert: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         return total_inserted
 
