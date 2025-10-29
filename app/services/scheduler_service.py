@@ -43,7 +43,8 @@ class EPGScheduler:
             trigger=trigger,
             id='epg_fetch',
             max_instances=1,
-            coalesce=True
+            coalesce=True,
+            misfire_grace_time=settings.epg_fetch_misfire_grace_sec
         )
 
         self.scheduler.start()

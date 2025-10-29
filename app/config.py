@@ -19,6 +19,7 @@ class CustomSettings(BaseSettings):
     max_epg_depth: int = 14  # Days to keep past programs (archive)
     max_future_epg_limit: int = 7 # Days to keep future epg
     epg_parse_timeout_sec: int = 600  # XML parsing timeout, 0 disables timeout
+    epg_fetch_misfire_grace_sec: int = 3600  # Allow 1 hour to run missed jobs
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -83,6 +84,14 @@ class CustomSettings(BaseSettings):
             raise ValueError("epg_parse_timeout_sec must be >= 0")
         return v
 
+    @field_validator('epg_fetch_misfire_grace_sec')
+    @classmethod
+    def validate_misfire_grace(cls, v: int) -> int:
+        """Validate scheduler misfire grace period (seconds)"""
+        if v < 0:
+            raise ValueError("epg_fetch_misfire_grace_sec must be >= 0")
+        return v
+
     @field_validator('epg_fetch_cron')
     @classmethod
     def validate_cron_expression(cls, v: str) -> str:
@@ -113,6 +122,7 @@ class CustomSettings(BaseSettings):
         logger.info(f"  Database: {self.database_path}")
         logger.info(f"  EPG Sources: {len(self.epg_sources or [])} configured")
         logger.info(f"  Fetch Schedule: {self.epg_fetch_cron}")
+        logger.info(f"  Fetch Misfire Grace: {self.epg_fetch_misfire_grace_sec}s")
         logger.info(f"  Archive Depth: {self.max_epg_depth} days")
         logger.info(f"  Future Limit: {self.max_future_epg_limit} days")
         logger.info(f"  Parse Timeout: {self.epg_parse_timeout_sec or 'disabled'} seconds")
