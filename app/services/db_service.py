@@ -15,6 +15,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
+from app.config import settings
 from app.models import Program
 from app.services.fetch_types import ChannelPayload, ProgramPayload
 
@@ -125,7 +126,7 @@ async def store_channels(db: AsyncSession, channels: Sequence[ChannelPayload]) -
         for channel in deduped_channels.values()
     ]
 
-    chunk_size = 1000
+    chunk_size = settings.epg_channels_chunk_size
     for start_index in range(0, len(payload), chunk_size):
         chunk = payload[start_index:start_index + chunk_size]
         await db.execute(channel_stmt, chunk)
@@ -137,10 +138,16 @@ async def prepare_program_bulk_insert(db: AsyncSession, *, drop_index: bool = Tr
     """Prepare SQLite connection for high-throughput program inserts."""
     logger.info("Preparing database connection for bulk program insert")
     connection = await db.connection()
-    await connection.exec_driver_sql("PRAGMA synchronous = OFF")
-    await connection.exec_driver_sql("PRAGMA wal_autocheckpoint = 0")
-    await connection.exec_driver_sql("PRAGMA temp_store = MEMORY")
-    await connection.exec_driver_sql("PRAGMA cache_size = -200000")
+    await connection.exec_driver_sql(
+        f"PRAGMA synchronous = {settings.sqlite_bulk_synchronous}"
+    )
+    await connection.exec_driver_sql(
+        f"PRAGMA wal_autocheckpoint = {settings.sqlite_bulk_wal_autocheckpoint_disable}"
+    )
+    await connection.exec_driver_sql(f"PRAGMA temp_store = {settings.sqlite_temp_store}")
+    await connection.exec_driver_sql(
+        f"PRAGMA cache_size = -{settings.sqlite_bulk_cache_size_kb}"
+    )
     await connection.exec_driver_sql("BEGIN IMMEDIATE")
     if drop_index:
         await _drop_program_time_index(db)
@@ -164,17 +171,33 @@ async def finalize_program_bulk_insert(
         await _create_program_time_index(db)
         await db.commit()
     if checkpoint:
-        await _run_wal_checkpoint(db, retries=6)
+        await _run_wal_checkpoint(db)
     connection = await db.connection()
-    await connection.exec_driver_sql("PRAGMA wal_autocheckpoint = 1000")
-    await connection.exec_driver_sql("PRAGMA synchronous = NORMAL")
+    await connection.exec_driver_sql(
+        f"PRAGMA wal_autocheckpoint = {settings.sqlite_wal_autocheckpoint_restore}"
+    )
+    await connection.exec_driver_sql(
+        f"PRAGMA synchronous = {settings.sqlite_default_synchronous}"
+    )
+    await connection.exec_driver_sql(
+        f"PRAGMA cache_size = -{settings.sqlite_default_cache_size_kb}"
+    )
 
 
-async def _run_wal_checkpoint(db: AsyncSession, *, retries: int = 5) -> None:
+async def _run_wal_checkpoint(
+    db: AsyncSession,
+    *,
+    retries: int | None = None,
+) -> None:
     """Attempt WAL checkpoint until no readers remain or retries exhausted."""
+    max_attempts = retries or settings.sqlite_wal_checkpoint_max_retries
+    backoff = settings.sqlite_wal_checkpoint_backoff_initial_sec
+    max_backoff = settings.sqlite_wal_checkpoint_backoff_max_sec
+    multiplier = settings.sqlite_wal_checkpoint_backoff_multiplier
+
+
     connection = await db.connection()
-    backoff = 1.0
-    for attempt in range(1, retries + 1):
+    for attempt in range(1, max_attempts + 1):
         result = await connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
         row = result.fetchone()
         if row is None:
@@ -192,17 +215,17 @@ async def _run_wal_checkpoint(db: AsyncSession, *, retries: int = 5) -> None:
         logger.warning(
             "WAL checkpoint busy on attempt %s/%s (log_frames=%s, checkpointed=%s); retrying in %.1fs",
             attempt,
-            retries,
+            max_attempts,
             log_frames,
             checkpointed,
             backoff,
         )
         await asyncio.sleep(backoff)
-        backoff = min(backoff * 2, 30.0)
+        backoff = min(backoff * multiplier, max_backoff)
 
     logger.error(
         "WAL checkpoint could not complete after %s attempts; readers may still be active",
-        retries,
+        max_attempts,
     )
 
 
@@ -231,7 +254,7 @@ async def store_programs(
     total_programs = len(program_list)
     logger.info("Storing %s programs", total_programs)
 
-    chunk_size = 100000
+    chunk_size = settings.epg_programs_chunk_size
     inserted_count = 0
     duplicates = 0
     dedupe_cache = existing_program_ids if existing_program_ids is not None else set()

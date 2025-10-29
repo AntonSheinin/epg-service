@@ -62,11 +62,10 @@ async def init_db() -> None:
     def configure_sqlite(dbapi_conn, _):
         """Configure SQLite connection parameters"""
         cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode = WAL")
-        cursor.execute("PRAGMA synchronous = NORMAL")
-        cursor.execute("PRAGMA temp_store = MEMORY")
-        # Set cache size to 64MB for better performance on larger datasets
-        cursor.execute("PRAGMA cache_size = -64000")
+        cursor.execute(f"PRAGMA journal_mode = {settings.sqlite_journal_mode}")
+        cursor.execute(f"PRAGMA synchronous = {settings.sqlite_default_synchronous}")
+        cursor.execute(f"PRAGMA temp_store = {settings.sqlite_temp_store}")
+        cursor.execute(f"PRAGMA cache_size = -{settings.sqlite_default_cache_size_kb}")
         cursor.execute("PRAGMA foreign_keys = ON")
         cursor.close()
 
