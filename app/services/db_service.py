@@ -46,26 +46,34 @@ async def delete_old_programs(db: AsyncSession, cutoff_time: datetime) -> int:
     return deleted_count
 
 
-async def delete_future_programs(db: AsyncSession, cutoff_time: datetime) -> int:
+async def delete_future_programs(db: AsyncSession, cutoff_time: datetime, inclusive: bool = False) -> int:
     """
-    Delete programs scheduled after the specified cutoff.
+    Delete programs scheduled after (or from) the specified cutoff.
 
     Args:
         db: Database session
-        cutoff_time: Remove programs with start_time greater than this value
+        cutoff_time: Remove programs with start_time greater than (or equal to) this value
+        inclusive: If True, use >= (includes cutoff time), if False use > (excludes cutoff time)
 
     Returns:
         Number of deleted programs
     """
+    if inclusive:
+        condition = Program.start_time >= cutoff_time
+        operator_str = ">="
+    else:
+        condition = Program.start_time > cutoff_time
+        operator_str = ">"
+
     result = await db.execute(
-        select(func.count(Program.id)).where(Program.start_time > cutoff_time)
+        select(func.count(Program.id)).where(condition)
     )
     deleted_count = result.scalar_one_or_none() or 0
 
-    stmt = delete(Program).where(Program.start_time > cutoff_time)
+    stmt = delete(Program).where(condition)
     await db.execute(stmt)
 
-    logger.info("Deleted %s future programs (start_time > %s)", deleted_count, cutoff_time.date())
+    logger.info("Deleted %s future programs (start_time %s %s)", deleted_count, operator_str, cutoff_time.date())
     return deleted_count
 
 
@@ -280,7 +288,9 @@ async def store_programs(
             :description,
             :created_at
         )
-        ON CONFLICT(xmltv_channel_id, start_time, title) DO NOTHING
+        ON CONFLICT(xmltv_channel_id, start_time, title) DO UPDATE SET
+            stop_time = EXCLUDED.stop_time,
+            description = EXCLUDED.description
         """
     )
 

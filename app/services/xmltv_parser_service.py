@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from uuid import uuid4
+import hashlib
 import logging
 
 from lxml import etree # type: ignore
@@ -8,6 +8,38 @@ from lxml import etree # type: ignore
 from app.services.fetch_types import ChannelPayload, ProgramPayload
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_deterministic_program_id(
+    channel_id: str,
+    start_time: datetime,
+    title: str
+) -> str:
+    """
+    Generate a deterministic UUID for a program based on its unique attributes.
+
+    This ensures the same program (same channel, start time, and title) always
+    gets the same ID, preventing duplicates when the same XMLTV data is parsed
+    multiple times.
+
+    Args:
+        channel_id: XMLTV channel ID
+        start_time: Program start time (timezone-aware)
+        title: Program title (will be normalized)
+
+    Returns:
+        Deterministic UUID string (32 hex characters)
+    """
+    # Normalize title: strip whitespace and convert to lowercase for consistency
+    normalized_title = title.strip().lower()
+
+    # Create a unique signature from the program's identifying attributes
+    # Using ISO format for start_time ensures consistent string representation
+    signature = f"{channel_id}|{start_time.isoformat()}|{normalized_title}"
+
+    # Generate SHA-256 hash and take first 32 characters (128 bits, same as UUID)
+    hash_obj = hashlib.sha256(signature.encode('utf-8'))
+    return hash_obj.hexdigest()[:32]
 
 def parse_xmltv_file(file_path: str, time_from: Optional[datetime] = None, time_to: Optional[datetime] = None) -> tuple[list[ChannelPayload], list[ProgramPayload]]:
     """
@@ -123,8 +155,11 @@ def _parse_single_program(programme: etree._Element, time_from: Optional[datetim
     # Optional fields
     description = _get_text(programme, 'desc')
 
+    # Generate deterministic ID to prevent duplicates across multiple fetches
+    program_id = _generate_deterministic_program_id(channel_id, start_time, title)
+
     return ProgramPayload(
-        id=str(uuid4()),
+        id=program_id,
         xmltv_channel_id=channel_id,
         start_time=start_time,
         stop_time=stop_time,

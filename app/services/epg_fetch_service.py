@@ -131,20 +131,27 @@ class EPGFetchPipeline:
         )
 
     async def _trim_program_window(self, context: FetchContext) -> tuple[int, int]:
+        # Calculate start of current day (midnight UTC) for future program cleanup
+        today_start = context.started_at.replace(hour=0, minute=0, second=0, microsecond=0)
+
         logger.info(
-            "Trimming programs outside target window: (< %s) and (> %s)",
+            "Trimming programs: deleting old programs (< %s) and all future programs (>= %s)",
             context.archive_cutoff.isoformat(),
-            context.future_cutoff.isoformat(),
+            today_start.isoformat(),
         )
         try:
             async with session_scope() as session:
+                # Delete old programs (archive cleanup)
                 deleted_past = await delete_old_programs(session, context.archive_cutoff)
-                deleted_future = await delete_future_programs(session, context.future_cutoff)
+
+                # Delete ALL future programs from start of current day (inclusive)
+                # This prevents duplicates when program titles change in the XMLTV source
+                deleted_future = await delete_future_programs(session, today_start, inclusive=True)
         except RuntimeError as exc:
             logger.error("Database not initialized: %s", exc)
             raise
         logger.info(
-            "Deleted %s old programs and %s future programs outside window",
+            "Deleted %s old programs and %s future programs (from today onwards)",
             deleted_past,
             deleted_future,
         )
