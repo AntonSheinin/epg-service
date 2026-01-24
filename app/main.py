@@ -7,8 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.config import setup_logging
-from app.database import init_db, close_db
-from app.services.scheduler_service import epg_scheduler
+from app.application.epg_fetch_service import configure_uow_factory
+from app.application.scheduler_service import epg_scheduler
+from app.infrastructure.db.session import init_db, close_db
+from app.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 from app.routers import main_router
 from app.utils.file_operations import close_http_client
 
@@ -26,6 +28,8 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing database...")
         await init_db()
         logger.info("Database initialized successfully")
+
+        configure_uow_factory(lambda: SqlAlchemyUnitOfWork(begin=False))
 
         # Start scheduler
         logger.info("Starting scheduler...")

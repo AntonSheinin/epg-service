@@ -1,5 +1,5 @@
 """
-Shared dataclasses used across the EPG fetching pipeline.
+Domain entities for the EPG service.
 """
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from datetime import datetime
 
 
 @dataclass(slots=True)
-class ChannelPayload:
-    """In-memory representation of a channel row before persistence."""
+class Channel:
+    """Channel entity."""
     xmltv_id: str
     display_name: str
     icon_url: str | None = None
 
 
 @dataclass(slots=True)
-class ProgramPayload:
-    """In-memory representation of a program row before persistence."""
+class Program:
+    """Program entity."""
     id: str
     xmltv_channel_id: str
     start_time: datetime
@@ -27,4 +27,4 @@ class ProgramPayload:
     created_at: datetime | None = None
 
 
-__all__ = ["ChannelPayload", "ProgramPayload"]
+__all__ = ["Channel", "Program"]

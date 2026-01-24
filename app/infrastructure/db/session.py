@@ -1,13 +1,17 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-from collections.abc import AsyncIterator
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import event
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.config import settings
-from app.models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +20,34 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def _resolve_async_database_url(raw_url: str) -> str:
+    """Ensure the database URL points to an async-capable driver when needed."""
+    try:
+        url = make_url(raw_url)
+    except Exception:
+        return raw_url
+
+    drivername = url.drivername
+    if "+" in drivername:
+        return raw_url
+
+    if drivername in {"postgresql", "postgres"}:
+        url = url.set(drivername="postgresql+asyncpg")
+        return url.render_as_string(hide_password=False)
+
+    return raw_url
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Database dependency for FastAPI"""
+    """Database dependency for FastAPI."""
     session_factory = get_session_factory()
 
     async with session_factory() as session:
         yield session
 
 
-def _create_session_factory(engine):
-    """Create async session factory from engine"""
+def _create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """Create async session factory from engine."""
     return async_sessionmaker(
         engine,
         class_=AsyncSession,
@@ -36,7 +58,7 @@ def _create_session_factory(engine):
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Get the session factory (initialized in init_db)"""
+    """Get the session factory (initialized in init_db)."""
     global _session_factory
     if _session_factory is None:
         raise RuntimeError("Database not initialized. Call init_db() during startup.")
@@ -44,46 +66,31 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Initialize database schema and engine"""
+    """Initialize database engine and session factory."""
     global _engine, _session_factory
 
-    logger.info(f"Initializing database at {settings.database_path}")
+    resolved_url = _resolve_async_database_url(settings.database_url)
+    try:
+        safe_url = make_url(resolved_url).render_as_string(hide_password=True)
+    except Exception:
+        safe_url = "invalid database url"
 
-    # Create engine
+    logger.info("Initializing database at %s", safe_url)
+
     _engine = create_async_engine(
-        f"sqlite+aiosqlite:///{settings.database_path}",
+        resolved_url,
         echo=False,
         future=True,
         pool_pre_ping=True,
-        connect_args={"timeout": 30, "check_same_thread": False},
     )
 
-    # Configure SQLite pragmas for better performance
-    def configure_sqlite(dbapi_conn, _):
-        """Configure SQLite connection parameters"""
-        cursor = dbapi_conn.cursor()
-        cursor.execute(f"PRAGMA journal_mode = {settings.sqlite_journal_mode}")
-        cursor.execute(f"PRAGMA synchronous = {settings.sqlite_default_synchronous}")
-        cursor.execute(f"PRAGMA temp_store = {settings.sqlite_temp_store}")
-        cursor.execute(f"PRAGMA cache_size = -{settings.sqlite_default_cache_size_kb}")
-        cursor.execute("PRAGMA foreign_keys = ON")
-        cursor.close()
-
-    # Register the event listener
-    event.listen(_engine.sync_engine, "connect", configure_sqlite)
-
-    # Create all tables
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    # Create session factory
     _session_factory = _create_session_factory(_engine)
 
     logger.info("Database initialized successfully")
 
 
 async def close_db() -> None:
-    """Close database connections on shutdown"""
+    """Close database connections on shutdown."""
     global _engine
     if _engine:
         await _engine.dispose()

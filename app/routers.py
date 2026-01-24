@@ -1,15 +1,14 @@
 from typing import Annotated
-from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException
 import logging
 
-from app.database import get_db
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.application.epg_fetch_service import fetch_and_process
+from app.application.epg_query_service import get_epg_data
+from app.application.scheduler_service import epg_scheduler
+from app.domain.repositories import EpgRepository
+from app.infrastructure.db.dependencies import get_epg_repository
 from app.schemas import EPGRequest, EPGResponse
-from app.services import (
-    get_epg_data,
-    fetch_and_process,
-    epg_scheduler
-)
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +62,7 @@ async def trigger_fetch() -> dict:
 @main_router.post("/epg", response_model=EPGResponse)
 async def get_epg(
     request: EPGRequest,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    repo: Annotated[EpgRepository, Depends(get_epg_repository)]
 ) -> EPGResponse:
     """
     Get EPG data for multiple channels with individual time windows
@@ -74,4 +73,4 @@ async def get_epg(
     Returns:
         EPG data grouped by channel xmltv_id with timestamps in requested timezone
     """
-    return await get_epg_data(db, request)
+    return await get_epg_data(repo, request)

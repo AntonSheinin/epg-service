@@ -6,15 +6,15 @@ This module handles merging of channels and programs from multiple sources.
 import logging
 from collections.abc import MutableMapping, Sequence
 
-from app.services.fetch_types import ChannelPayload, ProgramPayload
+from app.domain.entities import Channel, Program
 
 logger = logging.getLogger(__name__)
 
 
 def merge_channels(
-    existing_channels: MutableMapping[str, ChannelPayload],
-    new_channels: Sequence[ChannelPayload]
-) -> tuple[MutableMapping[str, ChannelPayload], int]:
+    existing_channels: MutableMapping[str, Channel],
+    new_channels: Sequence[Channel],
+) -> tuple[MutableMapping[str, Channel], int]:
     """
     Merge new channels into existing channel dictionary.
 
@@ -22,8 +22,8 @@ def merge_channels(
     Counts as 'new' only if channel was not previously seen.
 
     Args:
-        existing_channels: Dictionary of existing channels (xmltv_id -> ChannelPayload)
-        new_channels: Iterable of new channel payloads to merge
+        existing_channels: Dictionary of existing channels (xmltv_id -> Channel)
+        new_channels: Iterable of new channels to merge
 
     Returns:
         Tuple of (updated_channels_dict, count_of_new_channels_added)
@@ -43,7 +43,7 @@ def merge_channels(
                 updated_display != current.display_name
                 or updated_icon != current.icon_url
             ):
-                existing_channels[channel.xmltv_id] = ChannelPayload(
+                existing_channels[channel.xmltv_id] = Channel(
                     xmltv_id=channel.xmltv_id,
                     display_name=updated_display,
                     icon_url=updated_icon,
@@ -54,15 +54,15 @@ def merge_channels(
 
 
 def merge_programs(
-    existing_programs: MutableMapping[str, ProgramPayload],
-    new_programs: Sequence[ProgramPayload]
-) -> tuple[MutableMapping[str, ProgramPayload], int]:
+    existing_programs: MutableMapping[str, Program],
+    new_programs: Sequence[Program],
+) -> tuple[MutableMapping[str, Program], int]:
     """
     Merge new programs into existing program dictionary.
 
     Args:
-        existing_programs: Dictionary of existing programs (program_key -> ProgramPayload)
-        new_programs: Iterable of new program payloads to merge
+        existing_programs: Dictionary of existing programs (program_key -> Program)
+        new_programs: Iterable of new programs to merge
 
     Returns:
         Tuple of (updated_programs_dict, count_of_new_programs_added)
@@ -84,12 +84,12 @@ def merge_programs(
     return existing_programs, new_count
 
 
-def create_program_key(program: ProgramPayload) -> str:
+def create_program_key(program: Program) -> str:
     """
     Create a unique key for a program based on channel, time, and title.
 
     Args:
-        program: ProgramPayload instance
+        program: Program instance
 
     Returns:
         Unique program key string

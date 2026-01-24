@@ -13,7 +13,13 @@
       "Bash(docker-compose down:*)",
       "Bash(docker-compose up:*)",
       "Bash(curl:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Bash(docker inspect:*)",
+      "Bash(winpty docker exec fb30d65b60fa ls -la /app)",
+      "Bash(docker events:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

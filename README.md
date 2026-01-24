@@ -9,8 +9,8 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 - **Date range filtering** - Query EPG with required from_date and to_date parameters
 - **Timezone support** - Convert timestamps to any IANA timezone
 - **Smart data merging** - Automatic deduplication across sources
-- **SQLAlchemy ORM** - Type-safe database operations with SQLite backend
-- **SQLite storage** - WAL mode for concurrent read/write operations
+- **SQLAlchemy ORM** - Type-safe database operations with PostgreSQL backend
+- **PostgreSQL storage** - Reliable concurrent read/write operations
 - **REST API** - FastAPI-based endpoints for channels and programs
 - **Automatic scheduling** - APScheduler-based scheduled fetching with event loop integration
 - **Concurrency protection** - Prevents overlapping fetch operations
@@ -20,27 +20,22 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 
 ```
 epg-service/
-├── docker-compose.yml
-├── Dockerfile
-├── pyproject.toml
-├── .env
-├── data/                    # SQLite database
-└── app/
-    ├── main.py              # FastAPI application
-    ├── routers.py           # API routes
-    ├── config.py            # Configuration
-    ├── database.py          # Database setup
-    ├── schemas.py           # Pydantic models
-    ├── services/            # Business logic
-    │   ├── epg_query_service.py
-    │   ├── epg_fetch_service.py
-    │   ├── db_service.py
-    │   ├── scheduler_service.py
-    │   └── xmltv_parser_service.py
-    └── utils/               # Utilities
-        ├── timezone.py
-        ├── file_operations.py
-        └── data_merging.py
+|-- docker-compose.yml
+|-- Dockerfile
+|-- pyproject.toml
+|-- alembic.ini
+|-- alembic/
+|   |-- env.py
+|   `-- versions/
+`-- app/
+    |-- main.py              # FastAPI application
+    |-- routers.py           # API routes
+    |-- config.py            # Configuration
+    |-- schemas.py           # Pydantic models
+    |-- application/         # Use cases and orchestration
+    |-- domain/              # Entities and interfaces
+    |-- infrastructure/      # DB + external integrations
+    `-- utils/               # Utilities
 ```
 
 ## Quick Start
@@ -59,11 +54,11 @@ uv venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 uv pip install -e .
 
-# Create data directory
-mkdir -p data
-
 # Configure .env file (see Configuration section)
 cp .env.example .env
+
+# Run migrations
+alembic upgrade head
 
 # Run server
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -74,6 +69,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 docker-compose up --build or
 docker-compose up -d --build
+
+# Run migrations
+docker-compose exec epg-service alembic upgrade head
 ```
 
 Server will be available at `http://localhost:8000`
@@ -84,7 +82,10 @@ Create `.env` file in project root:
 
 ```env
 # Database
-DATABASE_PATH=./data/epg.db
+DATABASE_URL=postgresql://epg:epg@postgres:5432/epg
+POSTGRES_DB=epg
+POSTGRES_USER=epg
+POSTGRES_PASSWORD=epg
 
 # EPG Sources (comma-separated URLs)
 EPG_SOURCES=https://source1.com/epg.xml,https://source2.com/epg.xml
@@ -102,8 +103,10 @@ MAX_EPG_DEPTH=14
 MAX_FUTURE_EPG_LIMIT=7
 
 # XML parsing timeout in seconds (set 0 to disable timeout)
-EPG_PARSE_TIMEOUT_SECONDS=600
+EPG_PARSE_TIMEOUT_SEC=600
 ```
+
+When running the API outside Docker, use `DATABASE_URL=postgresql://epg:epg@localhost:5434/epg`.
 
 **Cron Examples:**
 - `0 3 * * *` - Daily at 3:00 AM
@@ -190,7 +193,7 @@ curl -X POST http://localhost:8000/epg \
 
 ## Database
 
-SQLite with WAL mode for concurrent read/write operations.
+PostgreSQL for concurrent read/write operations. Migrations are managed with Alembic.
 
 **Tables:**
 - `channels` - Channel metadata (xmltv_id, display_name, icon_url)
@@ -204,7 +207,7 @@ SQLite with WAL mode for concurrent read/write operations.
 ## Recent Improvements
 
 ### SQLAlchemy Migration (v0.3.0)
-- Migrated from raw aiosqlite to SQLAlchemy ORM
+- Migrated from raw database access to SQLAlchemy ORM
 - Type-safe database operations with proper async support
 - Lazy engine initialization for proper event loop handling
 - Enhanced error handling and logging
@@ -263,7 +266,8 @@ docker-compose down
 
 - Python 3.12+
 - FastAPI 0.115+
-- aiosqlite 0.20+
+- asyncpg 0.29+
+- alembic 1.13+
 - httpx 0.28+
 - lxml 5.3+
 - pydantic 2.10+
@@ -292,3 +296,5 @@ EPG_SOURCES=https://your-xmltv-source.com/epg.xml
 ## License
 
 MIT
+
+

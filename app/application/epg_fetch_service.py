@@ -1,5 +1,5 @@
 """
-EPG Fetching Service
+EPG Fetching Service.
 
 Coordinates downloading, parsing, and persistence of EPG data from multiple sources.
 """
@@ -7,31 +7,34 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Sequence
-
-from sqlalchemy import select
+from typing import Literal
 
 from app.config import settings
-from app.database import session_scope
-from app.models import Program
-from app.services.db_service import (
-    delete_future_programs,
-    delete_old_programs,
-    finalize_program_bulk_insert,
-    prepare_program_bulk_insert,
-    store_channels,
-    store_programs,
-)
-from app.services.epg_downloader_service import process_single_source
-from app.services.fetch_types import ChannelPayload, ProgramPayload
-
+from app.domain.entities import Channel, Program
+from app.domain.unit_of_work import EpgUnitOfWork
+from app.infrastructure.epg.downloader import process_single_source
 
 logger = logging.getLogger(__name__)
 
 # Global lock to prevent concurrent fetch operations
 _fetch_lock = asyncio.Lock()
+
+_uow_factory: Callable[[], EpgUnitOfWork] | None = None
+
+
+def configure_uow_factory(factory: Callable[[], EpgUnitOfWork]) -> None:
+    """Configure the unit-of-work factory used by the fetch pipeline."""
+    global _uow_factory
+    _uow_factory = factory
+
+
+def _get_uow_factory() -> Callable[[], EpgUnitOfWork]:
+    if _uow_factory is None:
+        raise RuntimeError("Unit of work factory not configured.")
+    return _uow_factory
 
 
 @dataclass(slots=True)
@@ -55,8 +58,8 @@ class SourceSummary:
     programs_parsed: int = 0
     programs_inserted: int = 0
     error: str | None = None
-    channels: list[ChannelPayload] = field(default_factory=list)
-    programs: list[ProgramPayload] = field(default_factory=list)
+    channels: list[Channel] = field(default_factory=list)
+    programs: list[Program] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -83,12 +86,19 @@ class SourceSummary:
 class EPGFetchPipeline:
     """Coordinates download, merge, and persistence stages for a fetch cycle."""
 
-    def __init__(self, sources: Sequence[str], *, max_concurrency: int | None = None) -> None:
+    def __init__(
+        self,
+        sources: Sequence[str],
+        *,
+        uow_factory: Callable[[], EpgUnitOfWork],
+        max_concurrency: int | None = None,
+    ) -> None:
         self.sources = [source for source in sources if source]
         self.total_sources = len(self.sources)
         self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
         self._semaphore = asyncio.Semaphore(self._concurrency)
         self._parse_timeout = settings.epg_parse_timeout_sec
+        self._uow_factory = uow_factory
 
     async def run(self) -> dict:
         context = self._build_context()
@@ -106,7 +116,7 @@ class EPGFetchPipeline:
 
         deleted_past, deleted_future = await self._trim_program_window(context)
         summaries = await self._collect_sources(context)
-        programs_inserted = await self._persist_sources(context, summaries)
+        programs_inserted = await self._persist_sources(summaries)
 
         return self._build_result(
             context,
@@ -140,13 +150,9 @@ class EPGFetchPipeline:
             today_start.isoformat(),
         )
         try:
-            async with session_scope() as session:
-                # Delete old programs (archive cleanup)
-                deleted_past = await delete_old_programs(session, context.archive_cutoff)
-
-                # Delete ALL future programs from start of current day (inclusive)
-                # This prevents duplicates when program titles change in the XMLTV source
-                deleted_future = await delete_future_programs(session, today_start, inclusive=True)
+            async with self._uow_factory() as uow:
+                deleted_past = await uow.repo.delete_old_programs(context.archive_cutoff)
+                deleted_future = await uow.repo.delete_future_programs(today_start, inclusive=True)
         except RuntimeError as exc:
             logger.error("Database not initialized: %s", exc)
             raise
@@ -175,7 +181,7 @@ class EPGFetchPipeline:
         self,
         index: int,
         source_url: str,
-        context: FetchContext
+        context: FetchContext,
     ) -> SourceSummary:
         sanitized_url = _sanitize_url_for_logging(source_url)
         started_at = datetime.now(timezone.utc)
@@ -199,7 +205,7 @@ class EPGFetchPipeline:
                     index,
                     context.window_start,
                     context.window_end,
-                    parse_timeout_seconds=self._parse_timeout
+                    parse_timeout_seconds=self._parse_timeout,
                 )
             except Exception as exc:
                 completed_at = datetime.now(timezone.utc)
@@ -230,10 +236,11 @@ class EPGFetchPipeline:
             len(programs),
         )
 
-        # Ensure we have channel metadata for every program to satisfy FK constraints
         channel_ids = {channel.xmltv_id for channel in channels}
         missing_channels = {
-            program.xmltv_channel_id for program in programs if program.xmltv_channel_id not in channel_ids
+            program.xmltv_channel_id
+            for program in programs
+            if program.xmltv_channel_id not in channel_ids
         }
         if missing_channels:
             logger.warning(
@@ -243,7 +250,7 @@ class EPGFetchPipeline:
                 len(missing_channels),
             )
             fallback_channels = [
-                ChannelPayload(xmltv_id=channel_id, display_name=channel_id, icon_url=None)
+                Channel(xmltv_id=channel_id, display_name=channel_id, icon_url=None)
                 for channel_id in sorted(missing_channels)
             ]
             channels.extend(fallback_channels)
@@ -261,31 +268,11 @@ class EPGFetchPipeline:
             programs=list(programs),
         )
 
-    async def _load_existing_program_ids(self, context: FetchContext) -> set[str]:
-        """Load existing program identifiers within the active window for deduplication."""
-        async with session_scope() as session:
-            result = await session.execute(
-                select(Program.id).where(
-                    Program.start_time >= context.window_start,
-                    Program.start_time <= context.window_end,
-                )
-            )
-            existing_ids = set(result.scalars().all())
-        return existing_ids
-
     async def _persist_sources(
         self,
-        context: FetchContext,
         summaries: list[SourceSummary],
     ) -> int:
-        existing_program_ids = await self._load_existing_program_ids(context)
-        logger.info(
-            "Loaded %s existing program IDs for duplicate filtering",
-            len(existing_program_ids),
-        )
-
         total_inserted = 0
-        bulk_prepared = False
         for summary in summaries:
             if summary.status != "success":
                 continue
@@ -297,38 +284,11 @@ class EPGFetchPipeline:
                 summary.programs_parsed,
             )
 
-            inserted = 0
+            upserted = 0
             try:
-                async with session_scope(begin=False) as session:
-                    prepared_this_session = False
-                    try:
-                        await prepare_program_bulk_insert(
-                            session,
-                            drop_index=not bulk_prepared,
-                        )
-                        prepared_this_session = True
-                        bulk_prepared = True
-
-                        await store_channels(session, summary.channels)
-                        inserted = await store_programs(
-                            session,
-                            summary.programs,
-                            existing_program_ids,
-                        )
-                    finally:
-                        if prepared_this_session:
-                            try:
-                                await finalize_program_bulk_insert(
-                                    session,
-                                    rebuild_index=False,
-                                )
-                            except Exception as finalize_exc:
-                                logger.error(
-                                    "[Source %s] Failed to reset PRAGMAs after bulk insert: %s",
-                                    summary.index,
-                                    finalize_exc,
-                                    exc_info=True,
-                                )
+                async with self._uow_factory() as uow:
+                    await uow.repo.upsert_channels(summary.channels)
+                    upserted = await uow.repo.upsert_programs(summary.programs)
             except Exception as exc:
                 logger.error(
                     "[Source %s] Failed to store data: %s",
@@ -339,42 +299,19 @@ class EPGFetchPipeline:
                 summary.status = "failed"
                 summary.error = str(exc)
                 summary.programs_inserted = 0
-                try:
-                    existing_program_ids = await self._load_existing_program_ids(context)
-                except Exception as refresh_exc:
-                    logger.error(
-                        "Failed to refresh existing program cache after rollback: %s",
-                        refresh_exc,
-                        exc_info=True,
-                    )
                 continue
 
-            summary.programs_inserted = inserted
-            total_inserted += inserted
+            summary.programs_inserted = upserted
+            total_inserted += upserted
 
             logger.info(
-                "[Source %s] Stored %s programs (duplicates ignored automatically)",
+                "[Source %s] Stored %s program rows (inserted or updated)",
                 summary.index,
-                inserted,
+                upserted,
             )
 
             summary.channels.clear()
             summary.programs.clear()
-
-        if bulk_prepared:
-            try:
-                async with session_scope(begin=False) as session:
-                    await finalize_program_bulk_insert(
-                        session,
-                        rebuild_index=True,
-                        checkpoint=True,
-                    )
-            except Exception as exc:
-                logger.error(
-                    "Failed to finalize bulk program insert: %s",
-                    exc,
-                    exc_info=True,
-                )
 
         return total_inserted
 
@@ -420,7 +357,10 @@ def _sanitize_url_for_logging(url: str) -> str:
         return url
 
 
-async def fetch_and_process() -> dict:
+async def fetch_and_process(
+    *,
+    uow_factory: Callable[[], EpgUnitOfWork] | None = None,
+) -> dict:
     """
     Main entry point for EPG fetching with concurrency protection.
 
@@ -441,11 +381,12 @@ async def fetch_and_process() -> dict:
             logger.warning("EPG_SOURCES not configured - fetch aborted")
             return {"error": "EPG_SOURCES not configured"}
 
-        if not settings.database_path:
-            logger.error("DATABASE_PATH not configured - fetch aborted")
-            return {"error": "DATABASE_PATH not configured"}
+        if not settings.database_url:
+            logger.error("DATABASE_URL not configured - fetch aborted")
+            return {"error": "DATABASE_URL not configured"}
 
-        pipeline = EPGFetchPipeline(settings.epg_sources)
+        factory = uow_factory or _get_uow_factory()
+        pipeline = EPGFetchPipeline(settings.epg_sources, uow_factory=factory)
         try:
             result = await pipeline.run()
             logger.info("EPG fetch completed successfully")
@@ -456,3 +397,6 @@ async def fetch_and_process() -> dict:
         except Exception as exc:  # Catch-all to ensure API stability
             logger.error("Unexpected error during EPG fetch: %s", exc, exc_info=True)
             return {"error": str(exc)}
+
+
+__all__ = ["fetch_and_process", "configure_uow_factory"]
