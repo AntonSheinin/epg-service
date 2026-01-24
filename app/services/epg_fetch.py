@@ -7,34 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from app.config import settings
-from app.domain.entities import Channel, Program
-from app.domain.unit_of_work import EpgUnitOfWork
-from app.infrastructure.epg.downloader import process_single_source
+from app.models import Channel, Program
+from app.db.repository import SqlAlchemyEpgRepository
+from app.db.session import session_scope
+from app.services.downloader import process_single_source
 
 logger = logging.getLogger(__name__)
 
 # Global lock to prevent concurrent fetch operations
 _fetch_lock = asyncio.Lock()
-
-_uow_factory: Callable[[], EpgUnitOfWork] | None = None
-
-
-def configure_uow_factory(factory: Callable[[], EpgUnitOfWork]) -> None:
-    """Configure the unit-of-work factory used by the fetch pipeline."""
-    global _uow_factory
-    _uow_factory = factory
-
-
-def _get_uow_factory() -> Callable[[], EpgUnitOfWork]:
-    if _uow_factory is None:
-        raise RuntimeError("Unit of work factory not configured.")
-    return _uow_factory
 
 
 @dataclass(slots=True)
@@ -42,8 +29,6 @@ class FetchContext:
     started_at: datetime
     window_start: datetime
     window_end: datetime
-    archive_cutoff: datetime
-    future_cutoff: datetime
 
 
 @dataclass(slots=True)
@@ -90,7 +75,6 @@ class EPGFetchPipeline:
         self,
         sources: Sequence[str],
         *,
-        uow_factory: Callable[[], EpgUnitOfWork],
         max_concurrency: int | None = None,
     ) -> None:
         self.sources = [source for source in sources if source]
@@ -98,7 +82,6 @@ class EPGFetchPipeline:
         self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
         self._semaphore = asyncio.Semaphore(self._concurrency)
         self._parse_timeout = settings.epg_parse_timeout_sec
-        self._uow_factory = uow_factory
 
     async def run(self) -> dict:
         context = self._build_context()
@@ -136,8 +119,6 @@ class EPGFetchPipeline:
             started_at=started_at,
             window_start=window_start,
             window_end=window_end,
-            archive_cutoff=window_start,
-            future_cutoff=window_end,
         )
 
     async def _trim_program_window(self, context: FetchContext) -> tuple[int, int]:
@@ -146,13 +127,14 @@ class EPGFetchPipeline:
 
         logger.info(
             "Trimming programs: deleting old programs (< %s) and all future programs (>= %s)",
-            context.archive_cutoff.isoformat(),
+            context.window_start.isoformat(),
             today_start.isoformat(),
         )
         try:
-            async with self._uow_factory() as uow:
-                deleted_past = await uow.repo.delete_old_programs(context.archive_cutoff)
-                deleted_future = await uow.repo.delete_future_programs(today_start, inclusive=True)
+            async with session_scope(begin=False) as session:
+                repo = SqlAlchemyEpgRepository(session)
+                deleted_past = await repo.delete_old_programs(context.window_start)
+                deleted_future = await repo.delete_future_programs(today_start, inclusive=True)
         except RuntimeError as exc:
             logger.error("Database not initialized: %s", exc)
             raise
@@ -286,9 +268,10 @@ class EPGFetchPipeline:
 
             upserted = 0
             try:
-                async with self._uow_factory() as uow:
-                    await uow.repo.upsert_channels(summary.channels)
-                    upserted = await uow.repo.upsert_programs(summary.programs)
+                async with session_scope(begin=False) as session:
+                    repo = SqlAlchemyEpgRepository(session)
+                    await repo.upsert_channels(summary.channels)
+                    upserted = await repo.upsert_programs(summary.programs)
             except Exception as exc:
                 logger.error(
                     "[Source %s] Failed to store data: %s",
@@ -357,10 +340,7 @@ def _sanitize_url_for_logging(url: str) -> str:
         return url
 
 
-async def fetch_and_process(
-    *,
-    uow_factory: Callable[[], EpgUnitOfWork] | None = None,
-) -> dict:
+async def fetch_and_process() -> dict:
     """
     Main entry point for EPG fetching with concurrency protection.
 
@@ -385,8 +365,7 @@ async def fetch_and_process(
             logger.error("DATABASE_URL not configured - fetch aborted")
             return {"error": "DATABASE_URL not configured"}
 
-        factory = uow_factory or _get_uow_factory()
-        pipeline = EPGFetchPipeline(settings.epg_sources, uow_factory=factory)
+        pipeline = EPGFetchPipeline(settings.epg_sources)
         try:
             result = await pipeline.run()
             logger.info("EPG fetch completed successfully")
@@ -399,4 +378,4 @@ async def fetch_and_process(
             return {"error": str(exc)}
 
 
-__all__ = ["fetch_and_process", "configure_uow_factory"]
+__all__ = ["fetch_and_process"]

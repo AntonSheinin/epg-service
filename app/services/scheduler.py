@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
-from app.application.epg_fetch_service import fetch_and_process
+from app.services.epg_fetch import fetch_and_process
 
 logger = logging.getLogger(__name__)
 

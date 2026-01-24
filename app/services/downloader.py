@@ -11,8 +11,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from app.domain.entities import Channel, Program
-from app.infrastructure.xmltv.parser import parse_xmltv_file
+from app.models import Channel, Program
+from app.services.xmltv_parser import parse_xmltv_file
 from app.utils.file_operations import cleanup_temp_file, download_file
 
 logger = logging.getLogger(__name__)

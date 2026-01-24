@@ -30,7 +30,7 @@ async def get_http_client() -> httpx.AsyncClient:
         async with _http_client_lock:
             # Double-check pattern: another coroutine might have created it while we waited
             if _http_client is None:
-                _http_client = httpx.AsyncClient(timeout=120)
+                _http_client = httpx.AsyncClient(timeout=120, follow_redirects=True)
                 logger.debug("HTTP client initialized for connection pooling")
     assert _http_client is not None  # For type checkers
     return _http_client

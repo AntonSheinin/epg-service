@@ -7,7 +7,7 @@ import logging
 
 from lxml import etree  # type: ignore
 
-from app.domain.entities import Channel, Program
+from app.models import Channel, Program
 
 logger = logging.getLogger(__name__)
 

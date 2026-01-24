@@ -1,5 +1,5 @@
 """
-Domain entities for the EPG service.
+Data models for the EPG service.
 """
 from __future__ import annotations
 

@@ -13,9 +13,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.domain.entities import Channel, Program
-from app.domain.repositories import EpgRepository
-from app.infrastructure.db.models import ChannelRecord, ProgramRecord
+from app.models import Channel, Program
+from app.db.orm_models import ChannelRecord, ProgramRecord
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ def _chunked(items: Sequence, size: int) -> Sequence[Sequence]:
         yield items[start_index:start_index + size]
 
 
-class SqlAlchemyEpgRepository(EpgRepository):
+class SqlAlchemyEpgRepository:
     """SQLAlchemy-backed repository implementation."""
 
     def __init__(self, session: AsyncSession) -> None:

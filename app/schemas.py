@@ -1,7 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo
-from datetime import datetime
-from uuid import UUID
 
 from app.utils.timezone import parse_iso8601_to_utc, DateFormatError
 
@@ -53,23 +51,6 @@ class EPGRequest(BaseModel):
         return self
 
 
-class Channel(BaseModel):
-    """Channel data model"""
-    xmltv_id: str = Field(..., description="Unique XMLTV channel ID")
-    display_name: str = Field(..., description="Display name of the channel")
-    icon_url: str | None = Field(None, description="URL to channel icon")
-
-
-class Program(BaseModel):
-    """Program data model"""
-    id: str = Field(..., description="Unique program ID (UUID)")
-    xmltv_channel_id: str = Field(..., description="XMLTV channel ID this program belongs to")
-    start_time: str = Field(..., description="ISO8601 UTC start time")
-    stop_time: str = Field(..., description="ISO8601 UTC stop time")
-    title: str = Field(..., description="Program title")
-    description: str | None = Field(None, description="Program description")
-
-
 class ProgramResponse(BaseModel):
     """Single program data"""
     id: str
@@ -77,20 +58,6 @@ class ProgramResponse(BaseModel):
     stop_time: str
     title: str
     description: str | None
-
-
-class ErrorDetail(BaseModel):
-    """Standard error detail"""
-    code: str = Field(..., description="Error code (e.g., 'FETCH_FAILED', 'VALIDATION_ERROR')")
-    message: str = Field(..., description="Human-readable error message")
-    context: dict | None = Field(None, description="Additional context about the error")
-
-
-class StandardErrorResponse(BaseModel):
-    """Standardized error response for all endpoints"""
-    status: str = Field("error", description="Status indicator")
-    timestamp: str = Field(..., description="ISO8601 timestamp of error")
-    error: ErrorDetail = Field(..., description="Error details")
 
 
 class EPGResponse(BaseModel):

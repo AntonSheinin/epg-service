@@ -2,18 +2,23 @@ from typing import Annotated
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.epg_fetch_service import fetch_and_process
-from app.application.epg_query_service import get_epg_data
-from app.application.scheduler_service import epg_scheduler
-from app.domain.repositories import EpgRepository
-from app.infrastructure.db.dependencies import get_epg_repository
+from app.services.epg_fetch import fetch_and_process
+from app.services.epg_query import get_epg_data
+from app.services.scheduler import epg_scheduler
+from app.db.repository import SqlAlchemyEpgRepository
+from app.db.session import get_db
 from app.schemas import EPGRequest, EPGResponse
 
 
 logger = logging.getLogger(__name__)
 
 main_router = APIRouter()
+
+
+async def _get_repo(db: AsyncSession = Depends(get_db)) -> SqlAlchemyEpgRepository:
+    return SqlAlchemyEpgRepository(db)
 
 @main_router.get("/")
 async def root() -> dict:
@@ -62,7 +67,7 @@ async def trigger_fetch() -> dict:
 @main_router.post("/epg", response_model=EPGResponse)
 async def get_epg(
     request: EPGRequest,
-    repo: Annotated[EpgRepository, Depends(get_epg_repository)]
+    repo: Annotated[SqlAlchemyEpgRepository, Depends(_get_repo)]
 ) -> EPGResponse:
     """
     Get EPG data for multiple channels with individual time windows
