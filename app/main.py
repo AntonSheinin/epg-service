@@ -10,7 +10,6 @@ from app.config import setup_logging
 from app.services.scheduler import epg_scheduler
 from app.db.session import init_db, close_db
 from app.routers import main_router
-from app.utils.file_operations import close_http_client
 
 
 setup_logging()
@@ -51,12 +50,6 @@ async def lifespan(app: FastAPI):
         await close_db()
     except Exception as e:
         logger.error(f"Error closing database: {e}", exc_info=True)
-
-    try:
-        await close_http_client()
-        logger.info("HTTP client closed")
-    except Exception as e:
-        logger.error(f"Error closing HTTP client: {e}", exc_info=True)
 
     logger.info("EPG Service stopped")
 

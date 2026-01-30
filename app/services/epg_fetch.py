@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+import httpx
+from lxml import etree  # type: ignore
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.config import settings
 from app.models import Channel, Program
 from app.db.repository import SqlAlchemyEpgRepository
@@ -71,12 +75,7 @@ class SourceSummary:
 class EPGFetchPipeline:
     """Coordinates download, merge, and persistence stages for a fetch cycle."""
 
-    def __init__(
-        self,
-        sources: Sequence[str],
-        *,
-        max_concurrency: int | None = None,
-    ) -> None:
+    def __init__(self, sources: Sequence[str], *, max_concurrency: int | None = None) -> None:
         self.sources = [source for source in sources if source]
         self.total_sources = len(self.sources)
         self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
@@ -189,7 +188,7 @@ class EPGFetchPipeline:
                     context.window_end,
                     parse_timeout_seconds=self._parse_timeout,
                 )
-            except Exception as exc:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, etree.XMLSyntaxError) as exc:
                 completed_at = datetime.now(timezone.utc)
                 logger.error(
                     "[Source %s] Failed to process %s: %s",
@@ -272,7 +271,7 @@ class EPGFetchPipeline:
                     repo = SqlAlchemyEpgRepository(session)
                     await repo.upsert_channels(summary.channels)
                     upserted = await repo.upsert_programs(summary.programs)
-            except Exception as exc:
+            except SQLAlchemyError as exc:
                 logger.error(
                     "[Source %s] Failed to store data: %s",
                     summary.index,
@@ -356,26 +355,7 @@ async def fetch_and_process() -> dict:
 
     async with _fetch_lock:
         logger.info("EPG fetch started at %s", datetime.now(timezone.utc).isoformat())
-
-        if not settings.epg_sources:
-            logger.warning("EPG_SOURCES not configured - fetch aborted")
-            return {"error": "EPG_SOURCES not configured"}
-
-        if not settings.database_url:
-            logger.error("DATABASE_URL not configured - fetch aborted")
-            return {"error": "DATABASE_URL not configured"}
-
-        pipeline = EPGFetchPipeline(settings.epg_sources)
-        try:
-            result = await pipeline.run()
-            logger.info("EPG fetch completed successfully")
-            return result
-        except RuntimeError as exc:
-            logger.error("EPG fetch failed: %s", exc, exc_info=True)
-            return {"error": str(exc)}
-        except Exception as exc:  # Catch-all to ensure API stability
-            logger.error("Unexpected error during EPG fetch: %s", exc, exc_info=True)
-            return {"error": str(exc)}
-
-
-__all__ = ["fetch_and_process"]
+        pipeline = EPGFetchPipeline(settings.epg_sources or [])
+        result = await pipeline.run()
+        logger.info("EPG fetch completed successfully")
+        return result

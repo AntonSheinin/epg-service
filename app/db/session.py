@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,7 +25,7 @@ def _resolve_async_database_url(raw_url: str) -> str:
     """Ensure the database URL points to an async-capable driver when needed."""
     try:
         url = make_url(raw_url)
-    except Exception:
+    except ArgumentError:
         return raw_url
 
     drivername = url.drivername
@@ -72,7 +73,7 @@ async def init_db() -> None:
     resolved_url = _resolve_async_database_url(settings.database_url)
     try:
         safe_url = make_url(resolved_url).render_as_string(hide_password=True)
-    except Exception:
+    except ArgumentError:
         safe_url = "invalid database url"
 
     logger.info("Initializing database at %s", safe_url)

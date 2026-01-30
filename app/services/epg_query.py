@@ -68,6 +68,3 @@ async def get_epg_data(repo: SqlAlchemyEpgRepository, request: EPGRequest) -> EP
         total_programs=total_programs,
         epg=epg_data,
     )
-
-
-__all__ = ["get_epg_data"]

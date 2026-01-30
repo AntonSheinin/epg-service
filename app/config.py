@@ -1,6 +1,6 @@
 import logging
 
-from croniter import croniter
+from apscheduler.triggers.cron import CronTrigger
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -102,9 +102,9 @@ class CustomSettings(BaseSettings):
     @field_validator("epg_fetch_cron")
     @classmethod
     def validate_cron_expression(cls, value: str) -> str:
-        """Validate cron expression is valid."""
+        """Validate cron expression is valid for APScheduler."""
         try:
-            croniter(value)
+            CronTrigger.from_crontab(value)
             return value
         except (ValueError, KeyError) as exc:
             raise ValueError(f"Invalid cron expression '{value}': {exc}") from exc

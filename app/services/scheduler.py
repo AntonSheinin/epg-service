@@ -19,12 +19,9 @@ class EPGScheduler:
     async def _fetch_job(self) -> None:
         """Background job that runs the EPG fetch."""
         logger.info("Scheduled EPG fetch triggered")
-        try:
-            result = await fetch_and_process()
-            if "error" in result:
-                logger.error("Scheduled fetch failed: %s", result["error"])
-        except Exception as exc:
-            logger.error("Exception in scheduled fetch: %s", exc, exc_info=True)
+        result = await fetch_and_process()
+        if "error" in result:
+            logger.error("Scheduled fetch failed: %s", result["error"])
 
     def start(self) -> None:
         """Start the scheduler with EPG fetch job."""
@@ -32,12 +29,7 @@ class EPGScheduler:
             logger.warning("Scheduler already running")
             return
 
-        try:
-            trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
-        except (ValueError, KeyError) as exc:
-            logger.error("Invalid cron expression '%s': %s", settings.epg_fetch_cron, exc)
-            raise
-
+        trigger = CronTrigger.from_crontab(settings.epg_fetch_cron)
         self.scheduler = AsyncIOScheduler(timezone="UTC")
         self.scheduler.add_job(
             self._fetch_job,
@@ -71,6 +63,3 @@ class EPGScheduler:
 
 
 epg_scheduler = EPGScheduler()
-
-
-__all__ = ["epg_scheduler", "EPGScheduler"]
