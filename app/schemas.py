@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo
 
@@ -68,3 +70,23 @@ class EPGResponse(BaseModel):
     channels_found: int
     total_programs: int
     epg: dict[str, list[ProgramResponse]] = Field(..., description="EPG data grouped by xmltv_id")
+
+
+class HealthResponse(BaseModel):
+    """Service health response."""
+
+    status: Literal["up", "degraded", "down"]
+    service: str
+    time: str
+
+
+class DashboardStatsResponse(BaseModel):
+    """Dashboard statistics response."""
+
+    health: Literal["up", "degraded", "down"]
+    checked_at: str
+    last_epg_update_at: str | None
+    sources_total: int
+    last_channels_update_at: str | None
+    channels_updated_total: int | None
+    error: str | None

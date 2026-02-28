@@ -85,6 +85,23 @@ def convert_to_timezone(utc_time: datetime | str, target_tz: str) -> str:
     return dt.astimezone(target_zone).isoformat()
 
 
+def to_utc_iso8601_z(value: datetime) -> str:
+    """
+    Format datetime as UTC ISO8601 string with trailing 'Z'.
+
+    Args:
+        value: Datetime to format (aware or naive)
+
+    Returns:
+        UTC timestamp in ISO8601 format, e.g. '2026-02-28T12:00:00Z'
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def calculate_time_window(request: "EPGRequest") -> tuple[datetime, datetime]:
     """
     Calculate start and end time for EPG query based on request parameters

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from app.config import setup_logging
 from app.services.scheduler import epg_scheduler
 from app.db.session import init_db, close_db
-from app.routers import main_router
+from app.routers import api_v1_router, main_router
 
 
 setup_logging()
@@ -61,6 +61,7 @@ app = FastAPI(
 )
 
 app.include_router(main_router)
+app.include_router(api_v1_router)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
