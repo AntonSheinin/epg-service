@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo
 
 from app.utils.timezone import parse_iso8601_to_utc, DateFormatError
@@ -75,18 +75,106 @@ class EPGResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Service health response."""
 
-    status: Literal["up", "degraded", "down"]
-    service: str
-    time: str
+    status: Literal["up", "degraded", "down"] = Field(
+        ...,
+        description="Service health state.",
+        examples=["up"],
+    )
+    service: str = Field(
+        ...,
+        description="Service identifier.",
+        examples=["epg-service"],
+    )
+    time: str = Field(
+        ...,
+        description="Response timestamp in UTC ISO-8601 format.",
+        examples=["2026-02-28T12:00:00Z"],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "up",
+                "service": "epg-service",
+                "time": "2026-02-28T12:00:00Z",
+            }
+        }
+    )
 
 
 class StatsResponse(BaseModel):
     """Service stats response."""
 
-    checked_at: str
-    next_epg_update_at: str | None
-    last_epg_update_at: str | None
-    sources_total: int
-    last_channels_update_at: str | None
-    last_updated_channels_count: int | None
-    error: str | None
+    checked_at: str = Field(
+        ...,
+        description="Time when the stats payload was produced (UTC ISO-8601).",
+        examples=["2026-02-28T12:00:00Z"],
+    )
+    next_epg_update_at: str | None = Field(
+        ...,
+        description="Next scheduled EPG fetch time (UTC ISO-8601), if scheduler is active.",
+        examples=["2026-02-29T03:00:00Z"],
+    )
+    last_epg_update_at: str | None = Field(
+        ...,
+        description="Last successful global EPG update time (UTC ISO-8601).",
+        examples=["2026-02-28T11:45:00Z"],
+    )
+    sources_total: int = Field(
+        ...,
+        description="Number of configured enabled EPG sources.",
+        examples=[12],
+    )
+    last_channels_update_at: str | None = Field(
+        ...,
+        description="Last time channel EPG data changed due to a successful import (UTC ISO-8601).",
+        examples=["2026-02-28T11:45:00Z"],
+    )
+    last_updated_channels_count: int | None = Field(
+        ...,
+        description="Number of channels with actual EPG row inserts/updates in the last successful cycle.",
+        examples=[8432],
+    )
+    error: str | None = Field(
+        ...,
+        description="Stats warning/error details, if any.",
+        examples=[None],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "checked_at": "2026-02-28T12:00:00Z",
+                "next_epg_update_at": "2026-02-29T03:00:00Z",
+                "last_epg_update_at": "2026-02-28T11:45:00Z",
+                "sources_total": 12,
+                "last_channels_update_at": "2026-02-28T11:45:00Z",
+                "last_updated_channels_count": 8432,
+                "error": None,
+            }
+        }
+    )
+
+
+class ServiceInfoResponse(BaseModel):
+    """Service root endpoint response."""
+
+    service: str = Field(..., examples=["EPG Service"])
+    version: str = Field(..., examples=["0.1.0"])
+    next_scheduled_fetch: str | None = Field(
+        ...,
+        description="Next scheduler run time in ISO-8601 format, if available.",
+        examples=["2026-02-29T03:00:00+00:00"],
+    )
+    endpoints: dict[str, str] = Field(
+        ...,
+        description="Available API endpoints.",
+        examples=[
+            {
+                "fetch": "/fetch - Manually trigger EPG fetch",
+                "epg": "/epg - Get EPG for multiple channels (POST)",
+                "health": "/health - Health check",
+                "stats": "/stats - Service stats",
+            }
+        ],
+    )

@@ -57,6 +57,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="EPG Service",
     version="0.1.0",
+    description=(
+        "EPG Service API for fetching, importing, and querying XMLTV data. "
+        "Primary operational endpoints: `/health`, `/stats`, `/fetch`, `/epg`."
+    ),
     lifespan=lifespan
 )
 

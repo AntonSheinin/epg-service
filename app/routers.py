@@ -18,6 +18,7 @@ from app.schemas import (
     EPGRequest,
     EPGResponse,
     HealthResponse,
+    ServiceInfoResponse,
     StatsResponse,
 )
 from app.utils.timezone import to_utc_iso8601_z
@@ -31,25 +32,34 @@ main_router = APIRouter()
 async def _get_repo(db: AsyncSession = Depends(get_db)) -> SqlAlchemyEpgRepository:
     return SqlAlchemyEpgRepository(db)
 
-@main_router.get("/")
-async def root() -> dict:
-    """Root endpoint with service information"""
+@main_router.get(
+    "/",
+    response_model=ServiceInfoResponse,
+    summary="Service Info",
+    description="Return service metadata and current endpoint map.",
+)
+async def root() -> ServiceInfoResponse:
     next_run = epg_scheduler.get_next_run_time()
 
-    return {
-        "service": "EPG Service",
-        "version": "0.1.0",
-        "next_scheduled_fetch": next_run.isoformat() if next_run else None,
-        "endpoints": {
+    return ServiceInfoResponse(
+        service="EPG Service",
+        version="0.1.0",
+        next_scheduled_fetch=next_run.isoformat() if next_run else None,
+        endpoints={
             "fetch": "/fetch - Manually trigger EPG fetch",
             "epg": "/epg - Get EPG for multiple channels (POST)",
             "health": "/health - Health check",
-            "stats": "/stats - Service stats"
-        }
-    }
+            "stats": "/stats - Service stats",
+        },
+    )
 
 
-@main_router.get("/health", response_model=HealthResponse)
+@main_router.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Service Health",
+    description="Return current service health for client-facing API availability.",
+)
 async def health_check() -> HealthResponse:
     """Service health endpoint."""
     status = "up"
@@ -69,7 +79,18 @@ async def health_check() -> HealthResponse:
     )
 
 
-@main_router.get("/stats", response_model=StatsResponse)
+@main_router.get(
+    "/stats",
+    response_model=StatsResponse,
+    summary="Service Stats",
+    description="Return latest EPG ingestion statistics and next scheduled update time.",
+    responses={
+        500: {
+            "description": "Stats computation failed.",
+            "model": StatsResponse,
+        }
+    },
+)
 async def stats() -> StatsResponse | JSONResponse:
     """Service stats endpoint."""
     try:
@@ -95,7 +116,11 @@ async def stats() -> StatsResponse | JSONResponse:
         )
 
 
-@main_router.post("/fetch")
+@main_router.post(
+    "/fetch",
+    summary="Trigger Fetch",
+    description="Manually trigger an EPG fetch/import cycle from configured sources.",
+)
 async def trigger_fetch() -> dict:
     """
     Manually trigger EPG fetch from source
@@ -111,7 +136,12 @@ async def trigger_fetch() -> dict:
     return result
 
 
-@main_router.post("/epg", response_model=EPGResponse)
+@main_router.post(
+    "/epg",
+    response_model=EPGResponse,
+    summary="Get EPG",
+    description="Return EPG programs for requested channels and date window.",
+)
 async def get_epg(
     request: EPGRequest,
     repo: Annotated[SqlAlchemyEpgRepository, Depends(_get_repo)]
