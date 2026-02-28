@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -64,4 +64,34 @@ class ProgramRecord(Base):
         return f"<ProgramRecord(id={self.id}, title={self.title}, channel={self.xmltv_channel_id})>"
 
 
-__all__ = ["Base", "ChannelRecord", "ProgramRecord"]
+class ImportStatusRecord(Base):
+    """Singleton import status persistence model."""
+
+    __tablename__ = "import_status"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_epg_update_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_channels_update_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_updated_channels_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            "<ImportStatusRecord("
+            f"id={self.id}, "
+            f"last_epg_update_at={self.last_epg_update_at}, "
+            f"last_updated_channels_count={self.last_updated_channels_count}"
+            ")>"
+        )
+
+
+__all__ = ["Base", "ChannelRecord", "ProgramRecord", "ImportStatusRecord"]

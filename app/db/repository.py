@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Channel, Program
-from app.db.orm_models import ChannelRecord, ProgramRecord
+from app.db.orm_models import ChannelRecord, ImportStatusRecord, ProgramRecord
 
 logger = logging.getLogger(__name__)
 
@@ -148,11 +148,11 @@ class SqlAlchemyEpgRepository:
                 updated_count,
             )
 
-    async def upsert_programs(self, programs: Sequence[Program]) -> int:
+    async def upsert_programs(self, programs: Sequence[Program]) -> tuple[int, set[str]]:
         program_list = list(programs)
         if not program_list:
             logger.debug("No programs to store")
-            return 0
+            return 0, set()
 
         total_programs = len(program_list)
         deduped = {program.id: program for program in program_list}
@@ -173,6 +173,7 @@ class SqlAlchemyEpgRepository:
                 max_rows_per_stmt,
             )
         upserted_count = 0
+        updated_channel_ids: set[str] = set()
 
         await self._session.flush()
 
@@ -213,14 +214,16 @@ class SqlAlchemyEpgRepository:
                     ProgramRecord.description.is_distinct_from(stmt.excluded.description),
                 ),
             )
+            stmt = stmt.returning(ProgramRecord.xmltv_channel_id)
 
             result = await self._session.execute(stmt)
+            returned_channels = result.scalars().all()
+            changed_channels = set(returned_channels)
             await self._session.commit()
 
-            chunk_affected = result.rowcount
-            if chunk_affected is None or chunk_affected < 0:
-                chunk_affected = len(rows)
+            chunk_affected = len(returned_channels)
             upserted_count += chunk_affected
+            updated_channel_ids.update(changed_channels)
 
             total_duration = perf_counter() - loop_start
             logger.info(
@@ -236,7 +239,7 @@ class SqlAlchemyEpgRepository:
             upserted_count,
         )
 
-        return upserted_count
+        return upserted_count, updated_channel_ids
 
     async def list_programs_for_channel(
         self,
@@ -268,5 +271,31 @@ class SqlAlchemyEpgRepository:
             )
             for row in rows
         ]
+
+    async def upsert_import_status(
+        self,
+        *,
+        last_epg_update_at: datetime,
+        last_channels_update_at: datetime,
+        last_updated_channels_count: int,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        stmt = pg_insert(ImportStatusRecord).values(
+            id=1,
+            last_epg_update_at=last_epg_update_at,
+            last_channels_update_at=last_channels_update_at,
+            last_updated_channels_count=last_updated_channels_count,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImportStatusRecord.id],
+            set_={
+                "last_epg_update_at": last_epg_update_at,
+                "last_channels_update_at": last_channels_update_at,
+                "last_updated_channels_count": last_updated_channels_count,
+                "updated_at": now,
+            },
+        )
+        await self._session.execute(stmt)
 
 __all__ = ["SqlAlchemyEpgRepository"]

@@ -119,7 +119,34 @@ When running the API outside Docker, use `DATABASE_URL=postgresql://epg:epg@loca
 Service information and available endpoints
 
 ### GET /health
-Health check and scheduler status
+Service health status
+
+**Response (200):**
+```json
+{
+  "status": "up",
+  "service": "epg-service",
+  "time": "2026-02-28T12:00:00Z"
+}
+```
+
+### GET /stats
+Service stats summary
+
+`last_updated_channels_count` is the number of channels that had actual EPG row inserts/updates in the last successful import cycle.
+
+**Response (200):**
+```json
+{
+  "checked_at": "2026-02-28T12:00:00Z",
+  "next_epg_update_at": "2026-02-29T03:00:00Z",
+  "last_epg_update_at": "2026-02-28T11:45:00Z",
+  "sources_total": 12,
+  "last_channels_update_at": "2026-02-28T11:45:00Z",
+  "last_updated_channels_count": 8432,
+  "error": null
+}
+```
 
 ### POST /fetch
 Manually trigger EPG fetch from sources

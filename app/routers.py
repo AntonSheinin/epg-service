@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -14,10 +15,10 @@ from app.services.scheduler import epg_scheduler
 from app.db.repository import SqlAlchemyEpgRepository
 from app.db.session import get_db, get_session_factory
 from app.schemas import (
-    DashboardStatsResponse,
     EPGRequest,
     EPGResponse,
     HealthResponse,
+    StatsResponse,
 )
 from app.utils.timezone import to_utc_iso8601_z
 
@@ -25,7 +26,6 @@ from app.utils.timezone import to_utc_iso8601_z
 logger = logging.getLogger(__name__)
 
 main_router = APIRouter()
-api_v1_router = APIRouter(prefix="/api/v1")
 
 
 async def _get_repo(db: AsyncSession = Depends(get_db)) -> SqlAlchemyEpgRepository:
@@ -43,21 +43,21 @@ async def root() -> dict:
         "endpoints": {
             "fetch": "/fetch - Manually trigger EPG fetch",
             "epg": "/epg - Get EPG for multiple channels (POST)",
-            "health": "/api/v1/health - Health check",
-            "dashboard_stats": "/api/v1/dashboard/stats - Dashboard stats"
+            "health": "/health - Health check",
+            "stats": "/stats - Service stats"
         }
     }
 
 
-@api_v1_router.get("/health", response_model=HealthResponse)
-async def health_check_v1() -> HealthResponse:
-    """Versioned health endpoint for dashboard consumption."""
-    status: str = "up"
+@main_router.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    """Service health endpoint."""
+    status = "up"
     try:
-        scheduler_running = bool(epg_scheduler.scheduler and epg_scheduler.scheduler.running)
-        sources_configured = len(settings.epg_sources or []) > 0
-        if not scheduler_running or not sources_configured:
-            status = "degraded"
+        # Health reflects service ability to serve API requests.
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            await session.execute(text("SELECT 1"))
     except Exception:
         logger.error("Failed to evaluate health status", exc_info=True)
         status = "down"
@@ -69,24 +69,25 @@ async def health_check_v1() -> HealthResponse:
     )
 
 
-@api_v1_router.get("/dashboard/stats", response_model=DashboardStatsResponse)
-async def dashboard_stats() -> DashboardStatsResponse | JSONResponse:
-    """Dashboard summary endpoint."""
+@main_router.get("/stats", response_model=StatsResponse)
+async def stats() -> StatsResponse | JSONResponse:
+    """Service stats endpoint."""
     try:
         session_factory = get_session_factory()
         async with session_factory() as session:
             payload = await collect_stats(session)
-        return DashboardStatsResponse(**payload)
+        return StatsResponse(**payload)
     except Exception as exc:
-        logger.error("Failed to compute dashboard stats: %s", exc, exc_info=True)
-        error_payload = DashboardStatsResponse(
-            health="down",
+        logger.error("Failed to compute stats: %s", exc, exc_info=True)
+        next_run = epg_scheduler.get_next_run_time()
+        error_payload = StatsResponse(
             checked_at=to_utc_iso8601_z(datetime.now(timezone.utc)),
+            next_epg_update_at=to_utc_iso8601_z(next_run) if next_run else None,
             last_epg_update_at=None,
             sources_total=len(settings.epg_sources or []),
             last_channels_update_at=None,
-            channels_updated_total=None,
-            error="Failed to compute dashboard stats.",
+            last_updated_channels_count=None,
+            error="Failed to compute stats.",
         )
         return JSONResponse(
             status_code=500,

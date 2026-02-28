@@ -80,13 +80,13 @@ class HealthResponse(BaseModel):
     time: str
 
 
-class DashboardStatsResponse(BaseModel):
-    """Dashboard statistics response."""
+class StatsResponse(BaseModel):
+    """Service stats response."""
 
-    health: Literal["up", "degraded", "down"]
     checked_at: str
+    next_epg_update_at: str | None
     last_epg_update_at: str | None
     sources_total: int
     last_channels_update_at: str | None
-    channels_updated_total: int | None
+    last_updated_channels_count: int | None
     error: str | None

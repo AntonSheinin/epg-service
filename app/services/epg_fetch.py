@@ -98,13 +98,23 @@ class EPGFetchPipeline:
 
         deleted_past, deleted_future = await self._trim_program_window(context)
         summaries = await self._collect_sources(context)
-        programs_inserted = await self._persist_sources(summaries)
+        (
+            programs_inserted,
+            last_updated_channels_count,
+            last_successful_update_at,
+        ) = await self._persist_sources(summaries)
+        if last_successful_update_at is not None:
+            await self._record_import_status(
+                completed_at=last_successful_update_at,
+                last_updated_channels_count=last_updated_channels_count,
+            )
 
         return self._build_result(
             context,
             deleted_past,
             deleted_future,
             programs_inserted,
+            last_updated_channels_count,
             summaries,
         )
 
@@ -252,8 +262,11 @@ class EPGFetchPipeline:
     async def _persist_sources(
         self,
         summaries: list[SourceSummary],
-    ) -> int:
+    ) -> tuple[int, int, datetime | None]:
         total_inserted = 0
+        updated_channel_ids: set[str] = set()
+        last_successful_update_at: datetime | None = None
+
         for summary in summaries:
             if summary.status != "success":
                 continue
@@ -266,11 +279,12 @@ class EPGFetchPipeline:
             )
 
             upserted = 0
+            changed_channel_ids: set[str] = set()
             try:
                 async with session_scope(begin=False) as session:
                     repo = SqlAlchemyEpgRepository(session)
                     await repo.upsert_channels(summary.channels)
-                    upserted = await repo.upsert_programs(summary.programs)
+                    upserted, changed_channel_ids = await repo.upsert_programs(summary.programs)
             except SQLAlchemyError as exc:
                 logger.error(
                     "[Source %s] Failed to store data: %s",
@@ -285,6 +299,9 @@ class EPGFetchPipeline:
 
             summary.programs_inserted = upserted
             total_inserted += upserted
+            updated_channel_ids.update(changed_channel_ids)
+            if last_successful_update_at is None or summary.completed_at > last_successful_update_at:
+                last_successful_update_at = summary.completed_at
 
             logger.info(
                 "[Source %s] Stored %s program rows (inserted or updated)",
@@ -295,7 +312,24 @@ class EPGFetchPipeline:
             summary.channels.clear()
             summary.programs.clear()
 
-        return total_inserted
+        return total_inserted, len(updated_channel_ids), last_successful_update_at
+
+    async def _record_import_status(
+        self,
+        *,
+        completed_at: datetime,
+        last_updated_channels_count: int,
+    ) -> None:
+        try:
+            async with session_scope(begin=False) as session:
+                repo = SqlAlchemyEpgRepository(session)
+                await repo.upsert_import_status(
+                    last_epg_update_at=completed_at,
+                    last_channels_update_at=completed_at,
+                    last_updated_channels_count=last_updated_channels_count,
+                )
+        except (SQLAlchemyError, RuntimeError) as exc:
+            logger.error("Failed to persist import status: %s", exc, exc_info=True)
 
     def _build_result(
         self,
@@ -303,6 +337,7 @@ class EPGFetchPipeline:
         deleted_past_count: int,
         deleted_future_count: int,
         inserted_count: int,
+        last_updated_channels_count: int,
         summaries: list[SourceSummary],
     ) -> dict:
         successes = sum(1 for summary in summaries if summary.status == "success")
@@ -315,6 +350,7 @@ class EPGFetchPipeline:
             "sources_succeeded": successes,
             "sources_failed": failures,
             "programs_inserted": inserted_count,
+            "last_updated_channels_count": last_updated_channels_count,
             "programs_deleted": deleted_past_count + deleted_future_count,
             "programs_deleted_past": deleted_past_count,
             "programs_deleted_future": deleted_future_count,
