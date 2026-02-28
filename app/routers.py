@@ -106,7 +106,6 @@ async def stats() -> StatsResponse | JSONResponse:
             next_epg_update_at=to_utc_iso8601_z(next_run) if next_run else None,
             last_epg_update_at=None,
             sources_total=len(settings.epg_sources or []),
-            last_channels_update_at=None,
             last_updated_channels_count=None,
             error="Failed to compute stats.",
         )

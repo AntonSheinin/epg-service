@@ -26,7 +26,6 @@ async def collect_stats(session: AsyncSession) -> dict:
     status_row = (await session.execute(status_stmt)).scalar_one_or_none()
 
     last_epg_update_at = status_row.last_epg_update_at if status_row else None
-    last_channels_update_at = status_row.last_channels_update_at if status_row else None
     last_updated_channels_count = status_row.last_updated_channels_count if status_row else None
 
     error: str | None = None
@@ -42,9 +41,6 @@ async def collect_stats(session: AsyncSession) -> dict:
             to_utc_iso8601_z(last_epg_update_at) if last_epg_update_at else None
         ),
         "sources_total": sources_total,
-        "last_channels_update_at": (
-            to_utc_iso8601_z(last_channels_update_at) if last_channels_update_at else None
-        ),
         "last_updated_channels_count": last_updated_channels_count,
         "error": error,
     }

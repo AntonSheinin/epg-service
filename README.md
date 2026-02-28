@@ -142,7 +142,6 @@ Service stats summary
   "next_epg_update_at": "2026-02-29T03:00:00Z",
   "last_epg_update_at": "2026-02-28T11:45:00Z",
   "sources_total": 12,
-  "last_channels_update_at": "2026-02-28T11:45:00Z",
   "last_updated_channels_count": 8432,
   "error": null
 }

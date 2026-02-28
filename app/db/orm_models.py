@@ -74,10 +74,6 @@ class ImportStatusRecord(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    last_channels_update_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
     last_updated_channels_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

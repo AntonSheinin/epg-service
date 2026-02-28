@@ -125,11 +125,6 @@ class StatsResponse(BaseModel):
         description="Number of configured enabled EPG sources.",
         examples=[12],
     )
-    last_channels_update_at: str | None = Field(
-        ...,
-        description="Last time channel EPG data changed due to a successful import (UTC ISO-8601).",
-        examples=["2026-02-28T11:45:00Z"],
-    )
     last_updated_channels_count: int | None = Field(
         ...,
         description="Number of channels with actual EPG row inserts/updates in the last successful cycle.",
@@ -148,7 +143,6 @@ class StatsResponse(BaseModel):
                 "next_epg_update_at": "2026-02-29T03:00:00Z",
                 "last_epg_update_at": "2026-02-28T11:45:00Z",
                 "sources_total": 12,
-                "last_channels_update_at": "2026-02-28T11:45:00Z",
                 "last_updated_channels_count": 8432,
                 "error": None,
             }

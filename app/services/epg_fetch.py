@@ -325,7 +325,6 @@ class EPGFetchPipeline:
                 repo = SqlAlchemyEpgRepository(session)
                 await repo.upsert_import_status(
                     last_epg_update_at=completed_at,
-                    last_channels_update_at=completed_at,
                     last_updated_channels_count=last_updated_channels_count,
                 )
         except (SQLAlchemyError, RuntimeError) as exc:
