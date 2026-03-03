@@ -75,6 +75,7 @@ class ImportStatusRecord(Base):
         nullable=True,
     )
     last_updated_channels_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_updated_sources_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -85,7 +86,8 @@ class ImportStatusRecord(Base):
             "<ImportStatusRecord("
             f"id={self.id}, "
             f"last_epg_update_at={self.last_epg_update_at}, "
-            f"last_updated_channels_count={self.last_updated_channels_count}"
+            f"last_updated_channels_count={self.last_updated_channels_count}, "
+            f"last_updated_sources_count={self.last_updated_sources_count}"
             ")>"
         )
 

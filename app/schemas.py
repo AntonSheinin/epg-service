@@ -122,8 +122,8 @@ class StatsResponse(BaseModel):
     )
     sources_total: int = Field(
         ...,
-        description="Number of configured enabled EPG sources.",
-        examples=[12],
+        description="Number of sources that were processed successfully in the last successful import cycle.",
+        examples=[9],
     )
     last_updated_channels_count: int | None = Field(
         ...,
@@ -142,7 +142,7 @@ class StatsResponse(BaseModel):
                 "checked_at": "2026-02-28T12:00:00Z",
                 "next_epg_update_at": "2026-02-29T03:00:00Z",
                 "last_epg_update_at": "2026-02-28T11:45:00Z",
-                "sources_total": 12,
+                "sources_total": 9,
                 "last_updated_channels_count": 8432,
                 "error": None,
             }

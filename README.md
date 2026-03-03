@@ -133,6 +133,8 @@ Service health status
 ### GET /stats
 Service stats summary
 
+`sources_total` is the number of sources that were processed successfully in the last successful import cycle.
+
 `last_updated_channels_count` is the number of channels that had actual EPG row inserts/updates in the last successful import cycle.
 
 **Response (200):**
@@ -141,7 +143,7 @@ Service stats summary
   "checked_at": "2026-02-28T12:00:00Z",
   "next_epg_update_at": "2026-02-29T03:00:00Z",
   "last_epg_update_at": "2026-02-28T11:45:00Z",
-  "sources_total": 12,
+  "sources_total": 9,
   "last_updated_channels_count": 8432,
   "error": null
 }

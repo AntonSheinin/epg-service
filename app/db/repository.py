@@ -277,12 +277,14 @@ class SqlAlchemyEpgRepository:
         *,
         last_epg_update_at: datetime,
         last_updated_channels_count: int,
+        last_updated_sources_count: int,
     ) -> None:
         now = datetime.now(timezone.utc)
         stmt = pg_insert(ImportStatusRecord).values(
             id=1,
             last_epg_update_at=last_epg_update_at,
             last_updated_channels_count=last_updated_channels_count,
+            last_updated_sources_count=last_updated_sources_count,
             updated_at=now,
         )
         stmt = stmt.on_conflict_do_update(
@@ -290,6 +292,7 @@ class SqlAlchemyEpgRepository:
             set_={
                 "last_epg_update_at": last_epg_update_at,
                 "last_updated_channels_count": last_updated_channels_count,
+                "last_updated_sources_count": last_updated_sources_count,
                 "updated_at": now,
             },
         )

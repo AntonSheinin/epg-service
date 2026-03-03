@@ -92,41 +92,46 @@ async def parse_xmltv_async(
     logger.debug("  File size: %.2f MB", file_path.stat().st_size / 1024 / 1024)
     logger.debug("  Time window filter: %s to %s", time_from.isoformat(), time_to.isoformat())
 
-    effective_timeout = (
-        parse_timeout_seconds if parse_timeout_seconds and parse_timeout_seconds > 0 else None
+    effective_timeout = parse_timeout_seconds if parse_timeout_seconds and parse_timeout_seconds > 0 else None
+
+    loop = asyncio.get_running_loop()
+    timeout_display = f"{effective_timeout}s" if effective_timeout else "disabled"
+    logger.debug(
+        "Offloading XML parsing to thread pool executor (timeout: %s)...",
+        timeout_display,
+    )
+    parse_task = loop.run_in_executor(
+        None,
+        parse_xmltv_file,
+        str(file_path),
+        time_from,
+        time_to,
     )
 
     try:
-        loop = asyncio.get_running_loop()
-        timeout_display = f"{effective_timeout}s" if effective_timeout else "disabled"
-        logger.debug(
-            "Offloading XML parsing to thread pool executor (timeout: %s)...",
-            timeout_display,
-        )
-        parse_task = loop.run_in_executor(
-            None,
-            parse_xmltv_file,
-            str(file_path),
-            time_from,
-            time_to,
-        )
         if effective_timeout:
             channels, programs = await asyncio.wait_for(parse_task, timeout=effective_timeout)
         else:
             channels, programs = await parse_task
-        logger.info(
-            "XML parsing completed successfully: %s channels, %s programs",
-            len(channels),
-            len(programs),
-        )
-        logger.debug(
-            "  Parsed channels: %s%s",
-            ", ".join([ch.xmltv_id for ch in channels[:3]]),
-            "..." if len(channels) > 3 else "",
-        )
-    except asyncio.TimeoutError:
+    except asyncio.CancelledError:
+        # Preserve cooperative cancellation for the whole fetch pipeline.
+        parse_task.cancel()
+        raise
+    except TimeoutError as exc:
+        parse_task.cancel()
         logger.error("XML parsing timed out after %s for %s", timeout_display, file_path)
-        raise ValueError("XML parsing timed out - file may be too large or malformed")
+        raise ValueError("XML parsing timed out - file may be too large or malformed") from exc
+
+    logger.info(
+        "XML parsing completed successfully: %s channels, %s programs",
+        len(channels),
+        len(programs),
+    )
+    logger.debug(
+        "  Parsed channels: %s%s",
+        ", ".join([ch.xmltv_id for ch in channels[:3]]),
+        "..." if len(channels) > 3 else "",
+    )
 
     if not channels:
         logger.warning("No channels found in XMLTV file")

@@ -101,12 +101,14 @@ class EPGFetchPipeline:
         (
             programs_inserted,
             last_updated_channels_count,
+            last_updated_sources_count,
             last_successful_update_at,
         ) = await self._persist_sources(summaries)
         if last_successful_update_at is not None:
             await self._record_import_status(
                 completed_at=last_successful_update_at,
                 last_updated_channels_count=last_updated_channels_count,
+                last_updated_sources_count=last_updated_sources_count,
             )
 
         return self._build_result(
@@ -198,7 +200,13 @@ class EPGFetchPipeline:
                     context.window_end,
                     parse_timeout_seconds=self._parse_timeout,
                 )
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, etree.XMLSyntaxError) as exc:
+            except (
+                httpx.HTTPError,
+                httpx.TimeoutException,
+                TimeoutError,
+                ValueError,
+                etree.XMLSyntaxError,
+            ) as exc:
                 completed_at = datetime.now(timezone.utc)
                 logger.error(
                     "[Source %s] Failed to process %s: %s",
@@ -262,9 +270,10 @@ class EPGFetchPipeline:
     async def _persist_sources(
         self,
         summaries: list[SourceSummary],
-    ) -> tuple[int, int, datetime | None]:
+    ) -> tuple[int, int, int, datetime | None]:
         total_inserted = 0
         updated_channel_ids: set[str] = set()
+        updated_sources_count = 0
         last_successful_update_at: datetime | None = None
 
         for summary in summaries:
@@ -300,6 +309,9 @@ class EPGFetchPipeline:
             summary.programs_inserted = upserted
             total_inserted += upserted
             updated_channel_ids.update(changed_channel_ids)
+            # A source is considered successfully updated if it completed
+            # processing/persistence without errors, even when no rows changed.
+            updated_sources_count += 1
             if last_successful_update_at is None or summary.completed_at > last_successful_update_at:
                 last_successful_update_at = summary.completed_at
 
@@ -312,13 +324,14 @@ class EPGFetchPipeline:
             summary.channels.clear()
             summary.programs.clear()
 
-        return total_inserted, len(updated_channel_ids), last_successful_update_at
+        return total_inserted, len(updated_channel_ids), updated_sources_count, last_successful_update_at
 
     async def _record_import_status(
         self,
         *,
         completed_at: datetime,
         last_updated_channels_count: int,
+        last_updated_sources_count: int,
     ) -> None:
         try:
             async with session_scope(begin=False) as session:
@@ -326,6 +339,7 @@ class EPGFetchPipeline:
                 await repo.upsert_import_status(
                     last_epg_update_at=completed_at,
                     last_updated_channels_count=last_updated_channels_count,
+                    last_updated_sources_count=last_updated_sources_count,
                 )
         except (SQLAlchemyError, RuntimeError) as exc:
             logger.error("Failed to persist import status: %s", exc, exc_info=True)

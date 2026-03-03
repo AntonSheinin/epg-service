@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.services.epg_fetch import fetch_and_process
 from app.services.epg_query import get_epg_data
 from app.services.stats import collect_stats
@@ -105,7 +104,7 @@ async def stats() -> StatsResponse | JSONResponse:
             checked_at=to_utc_iso8601_z(datetime.now(timezone.utc)),
             next_epg_update_at=to_utc_iso8601_z(next_run) if next_run else None,
             last_epg_update_at=None,
-            sources_total=len(settings.epg_sources or []),
+            sources_total=0,
             last_updated_channels_count=None,
             error="Failed to compute stats.",
         )
