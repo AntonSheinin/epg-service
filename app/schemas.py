@@ -117,17 +117,17 @@ class StatsResponse(BaseModel):
     )
     last_epg_update_at: str | None = Field(
         ...,
-        description="Last successful global EPG update time (UTC ISO-8601).",
+        description="Latest recorded global EPG import time (UTC ISO-8601).",
         examples=["2026-02-28T11:45:00Z"],
     )
     sources_total: int = Field(
         ...,
-        description="Number of sources that were processed successfully in the last successful import cycle.",
+        description="Number of sources that recorded committed updates in the latest import cycle.",
         examples=[9],
     )
     last_updated_channels_count: int | None = Field(
         ...,
-        description="Number of channels with actual EPG row inserts/updates in the last successful cycle.",
+        description="Number of channels with actual EPG row inserts/updates in the latest recorded import cycle.",
         examples=[8432],
     )
     error: str | None = Field(

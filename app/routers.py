@@ -145,12 +145,9 @@ async def get_epg(
     repo: Annotated[SqlAlchemyEpgRepository, Depends(_get_repo)]
 ) -> EPGResponse:
     """
-    Get EPG data for multiple channels with individual time windows
+    Get EPG data for multiple channels within one requested time window.
 
-    Args:
-        request: EPG request with channels, update mode, timezone, and optional date range
-
-    Returns:
-        EPG data grouped by channel xmltv_id with timestamps in requested timezone
+    Returns EPG data grouped by channel XMLTV ID with timestamps converted
+    to the requested timezone.
     """
     return await get_epg_data(repo, request)

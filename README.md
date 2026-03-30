@@ -5,7 +5,7 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 ## Features
 
 - **Multi-source EPG fetching** - Fetch and merge data from multiple XMLTV sources
-- **Concurrent fetching pipeline** - Parallelizes source downloads while keeping database writes safe
+- **Sequential streaming fetch pipeline** - Processes sources one by one with bounded-memory parsing and batch writes
 - **Date range filtering** - Query EPG with required from_date and to_date parameters
 - **Timezone support** - Convert timestamps to any IANA timezone
 - **Smart data merging** - Automatic deduplication across sources
@@ -32,9 +32,8 @@ epg-service/
     |-- routers.py           # API routes
     |-- config.py            # Configuration
     |-- schemas.py           # Pydantic models
-    |-- application/         # Use cases and orchestration
-    |-- domain/              # Entities and interfaces
-    |-- infrastructure/      # DB + external integrations
+    |-- db/                  # SQLAlchemy models, sessions, repositories
+    |-- services/            # Fetching, parsing, querying, scheduling
     `-- utils/               # Utilities
 ```
 
@@ -133,9 +132,9 @@ Service health status
 ### GET /stats
 Service stats summary
 
-`sources_total` is the number of sources that were processed successfully in the last successful import cycle.
+`sources_total` is the number of sources that recorded committed updates in the latest import cycle.
 
-`last_updated_channels_count` is the number of channels that had actual EPG row inserts/updates in the last successful import cycle.
+`last_updated_channels_count` is the number of channels that had actual EPG row inserts/updates in the latest recorded import cycle.
 
 **Response (200):**
 ```json
@@ -229,7 +228,7 @@ PostgreSQL for concurrent read/write operations. Migrations are managed with Ale
 
 **Data Retention:**
 - Historical: Configurable via `MAX_EPG_DEPTH` (default 14 days)
-- Future: Unlimited (accepts all future programs from sources)
+- Future: Configurable via `MAX_FUTURE_EPG_LIMIT` (default 7 days)
 - Auto-cleanup on each fetch
 
 ## Recent Improvements

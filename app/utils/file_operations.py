@@ -4,7 +4,9 @@ File operation utilities
 This module handles file download and cleanup operations with retry logic.
 """
 import asyncio
+import gzip
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -36,19 +38,28 @@ async def download_file(url: str, filename: str) -> Path:
         for attempt in range(3):
             try:
                 logger.debug(f"  Download attempt {attempt + 1}/3")
-                response = await client.get(url)
-                response.raise_for_status()
-
-                logger.debug(f"  HTTP {response.status_code}: Download completed")
-
                 temp_dir = Path(tempfile.gettempdir())
                 temp_file = temp_dir / filename
+                archive_file = temp_file.with_suffix(temp_file.suffix + ".download")
+                download_target = archive_file if _should_decompress_gzip(url) else temp_file
 
-                logger.debug(f"  Writing to temporary file: {temp_file}")
-                async with aiofiles.open(temp_file, 'wb') as f:
-                    await f.write(response.content)
+                logger.debug(f"  Writing to temporary file: {download_target}")
+                bytes_written = 0
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    logger.debug(f"  HTTP {response.status_code}: Download started")
+                    async with aiofiles.open(download_target, 'wb') as f:
+                        async for chunk in response.aiter_bytes():
+                            if not chunk:
+                                continue
+                            bytes_written += len(chunk)
+                            await f.write(chunk)
 
-                file_size = len(response.content) / (1024 * 1024)
+                if download_target != temp_file:
+                    await asyncio.to_thread(_decompress_gzip_file, archive_file, temp_file)
+                    cleanup_temp_file(archive_file)
+
+                file_size = bytes_written / (1024 * 1024)
                 logger.info(f"Successfully downloaded {file_size:.2f} MB from EPG source")
                 logger.debug(f"  Saved to: {temp_file}")
                 return temp_file
@@ -77,6 +88,20 @@ async def download_file(url: str, filename: str) -> Path:
                 else:
                     logger.error(f"Download failed after 3 attempts: HTTP {e.response.status_code} {e.response.reason_phrase}")
                     raise
+            except OSError:
+                cleanup_temp_file(temp_file)
+                cleanup_temp_file(archive_file)
+                raise
+
+
+def _should_decompress_gzip(url: str) -> bool:
+    return url.lower().endswith(".gz")
+
+
+def _decompress_gzip_file(source_path: Path, destination_path: Path) -> None:
+    logger.debug("Decompressing gzip archive %s -> %s", source_path, destination_path)
+    with gzip.open(source_path, "rb") as source, destination_path.open("wb") as destination:
+        shutil.copyfileobj(source, destination, length=1024 * 1024)
 
 
 def cleanup_temp_file(file_path: Path) -> bool:

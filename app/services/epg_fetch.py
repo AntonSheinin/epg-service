@@ -8,19 +8,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from typing import Literal
+from xml.etree.ElementTree import ParseError
 
 import httpx
-from lxml import etree  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.models import Channel, Program
 from app.db.repository import SqlAlchemyEpgRepository
 from app.db.session import session_scope
 from app.services.downloader import process_single_source
+from app.services.xmltv_parser import XMLTVProgramBatchReader, parse_xmltv_channels
+from app.utils.file_operations import cleanup_temp_file
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,8 @@ class SourceSummary:
     channels_parsed: int = 0
     programs_parsed: int = 0
     programs_inserted: int = 0
+    committed_changes: bool = False
     error: str | None = None
-    channels: list[Channel] = field(default_factory=list)
-    programs: list[Program] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -72,14 +73,21 @@ class SourceSummary:
         return payload
 
 
-class EPGFetchPipeline:
-    """Coordinates download, merge, and persistence stages for a fetch cycle."""
+@dataclass(slots=True)
+class CollectionResult:
+    summaries: list[SourceSummary]
+    programs_inserted: int
+    last_updated_channels_count: int
+    last_updated_sources_count: int
+    last_recorded_update_at: datetime | None
 
-    def __init__(self, sources: Sequence[str], *, max_concurrency: int | None = None) -> None:
+
+class EPGFetchPipeline:
+    """Coordinates download, parse, and persistence stages for a fetch cycle."""
+
+    def __init__(self, sources: Sequence[str]) -> None:
         self.sources = [source for source in sources if source]
         self.total_sources = len(self.sources)
-        self._concurrency = max(1, max_concurrency or min(4, self.total_sources or 1))
-        self._semaphore = asyncio.Semaphore(self._concurrency)
         self._parse_timeout = settings.epg_parse_timeout_sec
 
     async def run(self) -> dict:
@@ -95,29 +103,25 @@ class EPGFetchPipeline:
             "XML parsing timeout per source: %s",
             f"{self._parse_timeout}s" if self._parse_timeout else "disabled",
         )
+        logger.info("Source processing mode: sequential")
 
         deleted_past, deleted_future = await self._trim_program_window(context)
-        summaries = await self._collect_sources(context)
-        (
-            programs_inserted,
-            last_updated_channels_count,
-            last_updated_sources_count,
-            last_successful_update_at,
-        ) = await self._persist_sources(summaries)
-        if last_successful_update_at is not None:
+        collection = await self._collect_sources(context)
+
+        if collection.last_recorded_update_at is not None:
             await self._record_import_status(
-                completed_at=last_successful_update_at,
-                last_updated_channels_count=last_updated_channels_count,
-                last_updated_sources_count=last_updated_sources_count,
+                completed_at=collection.last_recorded_update_at,
+                last_updated_channels_count=collection.last_updated_channels_count,
+                last_updated_sources_count=collection.last_updated_sources_count,
             )
 
         return self._build_result(
             context,
             deleted_past,
             deleted_future,
-            programs_inserted,
-            last_updated_channels_count,
-            summaries,
+            collection.programs_inserted,
+            collection.last_updated_channels_count,
+            collection.summaries,
         )
 
     def _build_context(self) -> FetchContext:
@@ -133,7 +137,6 @@ class EPGFetchPipeline:
         )
 
     async def _trim_program_window(self, context: FetchContext) -> tuple[int, int]:
-        # Calculate start of current day (midnight UTC) for future program cleanup
         today_start = context.started_at.replace(hour=0, minute=0, second=0, microsecond=0)
 
         logger.info(
@@ -156,175 +159,203 @@ class EPGFetchPipeline:
         )
         return deleted_past, deleted_future
 
-    async def _collect_sources(self, context: FetchContext) -> list[SourceSummary]:
+    async def _collect_sources(self, context: FetchContext) -> CollectionResult:
         if not self.sources:
             logger.warning("No EPG sources configured - skipping fetch cycle")
-            return []
+            return CollectionResult([], 0, 0, 0, None)
 
-        tasks = [
-            asyncio.create_task(self._process_source(index, source_url, context))
-            for index, source_url in enumerate(self.sources, start=1)
-        ]
+        summaries: list[SourceSummary] = []
+        total_inserted = 0
+        updated_channel_ids: set[str] = set()
+        updated_sources_count = 0
+        last_recorded_update_at: datetime | None = None
 
-        summaries = await asyncio.gather(*tasks)
-        summaries.sort(key=lambda summary: summary.index)
-        return summaries
+        for index, source_url in enumerate(self.sources, start=1):
+            summary, changed_channel_ids = await self._process_source(index, source_url, context)
+            summaries.append(summary)
+
+            total_inserted += summary.programs_inserted
+            updated_channel_ids.update(changed_channel_ids)
+
+            if summary.status == "success" or summary.committed_changes:
+                updated_sources_count += 1
+                if last_recorded_update_at is None or summary.completed_at > last_recorded_update_at:
+                    last_recorded_update_at = summary.completed_at
+
+        return CollectionResult(
+            summaries=summaries,
+            programs_inserted=total_inserted,
+            last_updated_channels_count=len(updated_channel_ids),
+            last_updated_sources_count=updated_sources_count,
+            last_recorded_update_at=last_recorded_update_at,
+        )
 
     async def _process_source(
         self,
         index: int,
         source_url: str,
         context: FetchContext,
-    ) -> SourceSummary:
+    ) -> tuple[SourceSummary, set[str]]:
         sanitized_url = _sanitize_url_for_logging(source_url)
         started_at = datetime.now(timezone.utc)
+        changed_channel_ids: set[str] = set()
+        temp_file = None
+        program_reader: XMLTVProgramBatchReader | None = None
+        skipped_unknown_channels = 0
+        channels_parsed = 0
+        programs_parsed = 0
+        programs_inserted = 0
+        committed_changes = False
+        parse_deadline = None
+        if self._parse_timeout and self._parse_timeout > 0:
+            parse_deadline = perf_counter() + self._parse_timeout
+
         logger.info(
             "[Source %s/%s] Queued for download: %s",
             index,
             self.total_sources or len(self.sources),
             sanitized_url,
         )
+        logger.info(
+            "[Source %s/%s] Starting download: %s",
+            index,
+            self.total_sources or len(self.sources),
+            sanitized_url,
+        )
 
-        async with self._semaphore:
+        try:
+            temp_file = await process_single_source(source_url, index)
             logger.info(
-                "[Source %s/%s] Starting download: %s",
+                "[Source %s/%s] Download complete: %s",
                 index,
                 self.total_sources or len(self.sources),
                 sanitized_url,
             )
-            try:
-                channels, programs = await process_single_source(
-                    source_url,
-                    index,
-                    context.window_start,
-                    context.window_end,
-                    parse_timeout_seconds=self._parse_timeout,
+
+            logger.info("[Source %s] Parsing channel rows", index)
+            channels = await asyncio.to_thread(
+                parse_xmltv_channels,
+                temp_file,
+                deadline_monotonic=parse_deadline,
+            )
+            if not channels:
+                raise ValueError("No channels found in XMLTV")
+
+            known_channel_ids = {channel.xmltv_id for channel in channels}
+            channels_parsed = len(channels)
+
+            async with session_scope(begin=False) as session:
+                repo = SqlAlchemyEpgRepository(session)
+
+                logger.info("[Source %s] Persisting %s channels", index, len(channels))
+                await repo.upsert_channels(channels)
+                await session.commit()
+                committed_changes = True
+
+                logger.info("[Source %s] Starting program batch parsing", index)
+                program_reader = XMLTVProgramBatchReader(
+                    temp_file,
+                    known_channel_ids=known_channel_ids,
+                    time_from=context.window_start,
+                    time_to=context.window_end,
+                    batch_size=settings.epg_programs_chunk_size,
+                    deadline_monotonic=parse_deadline,
                 )
-            except (
-                httpx.HTTPError,
-                httpx.TimeoutException,
-                TimeoutError,
-                ValueError,
-                etree.XMLSyntaxError,
-            ) as exc:
-                completed_at = datetime.now(timezone.utc)
-                logger.error(
-                    "[Source %s] Failed to process %s: %s",
+
+                batch_number = 0
+
+                while True:
+                    batch = await asyncio.to_thread(program_reader.read_next_batch)
+                    skipped_unknown_channels += batch.skipped_unknown_channels
+
+                    if batch.programs:
+                        batch_number += 1
+                        programs_parsed += len(batch.programs)
+                        upserted, batch_changed_channel_ids = await repo.upsert_programs(batch.programs)
+                        programs_inserted += upserted
+                        changed_channel_ids.update(batch_changed_channel_ids)
+                        logger.info(
+                            "[Source %s] Stored program batch %s: payload=%s, affected=%s",
+                            index,
+                            batch_number,
+                            len(batch.programs),
+                            upserted,
+                        )
+
+                    if batch.reached_eof:
+                        break
+
+                if programs_parsed == 0:
+                    raise ValueError("No programs found in XMLTV")
+
+            completed_at = datetime.now(timezone.utc)
+            if skipped_unknown_channels:
+                logger.warning(
+                    "[Source %s] Skipped %s program(s) with unknown channel IDs",
                     index,
-                    sanitized_url,
-                    exc,
-                    exc_info=True,
+                    skipped_unknown_channels,
                 )
-                return SourceSummary(
+            logger.info(
+                "[Source %s/%s] Completed source import: %s (%s channels, %s programs, %s affected rows)",
+                index,
+                self.total_sources or len(self.sources),
+                sanitized_url,
+                channels_parsed,
+                programs_parsed,
+                programs_inserted,
+            )
+            return (
+                SourceSummary(
+                    index=index,
+                    source_url=source_url,
+                    sanitized_url=sanitized_url,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    status="success",
+                    channels_parsed=channels_parsed,
+                    programs_parsed=programs_parsed,
+                    programs_inserted=programs_inserted,
+                    committed_changes=committed_changes,
+                ),
+                changed_channel_ids,
+            )
+        except (
+            httpx.HTTPError,
+            httpx.TimeoutException,
+            TimeoutError,
+            ValueError,
+            ParseError,
+            SQLAlchemyError,
+        ) as exc:
+            completed_at = datetime.now(timezone.utc)
+            logger.error(
+                "[Source %s] Failed to process %s: %s",
+                index,
+                sanitized_url,
+                exc,
+                exc_info=True,
+            )
+            return (
+                SourceSummary(
                     index=index,
                     source_url=source_url,
                     sanitized_url=sanitized_url,
                     started_at=started_at,
                     completed_at=completed_at,
                     status="failed",
+                    channels_parsed=channels_parsed,
+                    programs_parsed=programs_parsed,
+                    programs_inserted=programs_inserted,
+                    committed_changes=committed_changes,
                     error=str(exc),
-                )
-
-        completed_at = datetime.now(timezone.utc)
-        logger.info(
-            "[Source %s/%s] Completed download: %s (%s channels, %s programs)",
-            index,
-            self.total_sources or len(self.sources),
-            sanitized_url,
-            len(channels),
-            len(programs),
-        )
-
-        channel_ids = {channel.xmltv_id for channel in channels}
-        missing_channels = {
-            program.xmltv_channel_id
-            for program in programs
-            if program.xmltv_channel_id not in channel_ids
-        }
-        if missing_channels:
-            logger.warning(
-                "[Source %s] %s program(s) reference %s missing channel(s); generating fallback entries",
-                index,
-                len(programs),
-                len(missing_channels),
+                ),
+                changed_channel_ids,
             )
-            fallback_channels = [
-                Channel(xmltv_id=channel_id, display_name=channel_id, icon_url=None)
-                for channel_id in sorted(missing_channels)
-            ]
-            channels.extend(fallback_channels)
-
-        return SourceSummary(
-            index=index,
-            source_url=source_url,
-            sanitized_url=sanitized_url,
-            started_at=started_at,
-            completed_at=completed_at,
-            status="success",
-            channels_parsed=len(channels),
-            programs_parsed=len(programs),
-            channels=list(channels),
-            programs=list(programs),
-        )
-
-    async def _persist_sources(
-        self,
-        summaries: list[SourceSummary],
-    ) -> tuple[int, int, int, datetime | None]:
-        total_inserted = 0
-        updated_channel_ids: set[str] = set()
-        updated_sources_count = 0
-        last_successful_update_at: datetime | None = None
-
-        for summary in summaries:
-            if summary.status != "success":
-                continue
-
-            logger.info(
-                "[Source %s] Persisting %s channels and %s programs",
-                summary.index,
-                summary.channels_parsed,
-                summary.programs_parsed,
-            )
-
-            upserted = 0
-            changed_channel_ids: set[str] = set()
-            try:
-                async with session_scope(begin=False) as session:
-                    repo = SqlAlchemyEpgRepository(session)
-                    await repo.upsert_channels(summary.channels)
-                    upserted, changed_channel_ids = await repo.upsert_programs(summary.programs)
-            except SQLAlchemyError as exc:
-                logger.error(
-                    "[Source %s] Failed to store data: %s",
-                    summary.index,
-                    exc,
-                    exc_info=True,
-                )
-                summary.status = "failed"
-                summary.error = str(exc)
-                summary.programs_inserted = 0
-                continue
-
-            summary.programs_inserted = upserted
-            total_inserted += upserted
-            updated_channel_ids.update(changed_channel_ids)
-            # A source is considered successfully updated if it completed
-            # processing/persistence without errors, even when no rows changed.
-            updated_sources_count += 1
-            if last_successful_update_at is None or summary.completed_at > last_successful_update_at:
-                last_successful_update_at = summary.completed_at
-
-            logger.info(
-                "[Source %s] Stored %s program rows (inserted or updated)",
-                summary.index,
-                upserted,
-            )
-
-            summary.channels.clear()
-            summary.programs.clear()
-
-        return total_inserted, len(updated_channel_ids), updated_sources_count, last_successful_update_at
+        finally:
+            if program_reader is not None:
+                program_reader.close()
+            if temp_file:
+                cleanup_temp_file(temp_file)
 
     async def _record_import_status(
         self,

@@ -33,7 +33,7 @@ async def collect_stats(session: AsyncSession) -> dict:
     if configured_sources_count == 0:
         error = "No enabled EPG sources configured."
     elif last_epg_update_at is None:
-        error = "No successful EPG import found yet."
+        error = "No EPG import recorded yet."
 
     return {
         "checked_at": to_utc_iso8601_z(checked_at),
