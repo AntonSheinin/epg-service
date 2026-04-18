@@ -272,6 +272,12 @@ class SqlAlchemyEpgRepository:
             for row in rows
         ]
 
+    async def get_last_epg_update_at(self) -> datetime | None:
+        stmt = select(ImportStatusRecord.last_epg_update_at).where(
+            ImportStatusRecord.id == 1
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def upsert_import_status(
         self,
         *,

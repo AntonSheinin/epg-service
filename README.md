@@ -177,6 +177,11 @@ Get EPG data for multiple channels with date range filtering and timezone conver
 - `to_date` (required): ISO8601 datetime for end of range
 - `timezone` (optional): IANA timezone for response (default: UTC)
 
+**Response fields:**
+- `response_generated_at`: Time when this `/epg` response was generated, converted to the requested timezone.
+- `last_epg_update_at`: Last successful EPG import/update time, converted to the requested timezone. `null` if no import has been recorded.
+- `epg`: Programs grouped by requested `xmltv_id`.
+
 **Examples:**
 
 Basic query:

@@ -31,6 +31,7 @@ async def get_epg_data(repo: SqlAlchemyEpgRepository, request: EPGRequest) -> EP
     channels_found_set: set[str] = set()
     total_programs = 0
     now = datetime.now(timezone.utc)
+    last_epg_update_at = await repo.get_last_epg_update_at()
 
     start_time, end_time = calculate_time_window(request)
 
@@ -61,7 +62,12 @@ async def get_epg_data(repo: SqlAlchemyEpgRepository, request: EPGRequest) -> EP
     )
 
     return EPGResponse(
-        timestamp=convert_to_timezone(now, request.timezone),
+        response_generated_at=convert_to_timezone(now, request.timezone),
+        last_epg_update_at=(
+            convert_to_timezone(last_epg_update_at, request.timezone)
+            if last_epg_update_at
+            else None
+        ),
         timezone=request.timezone,
         channels_requested=len(request.channels),
         channels_found=len(channels_found_set),

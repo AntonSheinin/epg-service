@@ -64,7 +64,14 @@ class ProgramResponse(BaseModel):
 
 class EPGResponse(BaseModel):
     """EPG data response"""
-    timestamp: str
+    response_generated_at: str = Field(
+        ...,
+        description="Time when this response was generated, converted to the requested timezone.",
+    )
+    last_epg_update_at: str | None = Field(
+        ...,
+        description="Last successful EPG import/update time, converted to the requested timezone.",
+    )
     timezone: str = Field(..., description="Timezone used for all timestamps in response")
     channels_requested: int
     channels_found: int
