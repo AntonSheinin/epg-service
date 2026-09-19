@@ -5,6 +5,15 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      EPG_SOURCES_FILE: /app/epg_sources.toml
+    volumes:
+      - type: bind
+        source: ./config/epg_sources.toml
+        target: /app/epg_sources.toml
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       - postgres
     restart: unless-stopped

@@ -17,7 +17,7 @@ from xml.etree.ElementTree import ParseError
 import httpx
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import settings
+from app.config import EpgSourceConfig, epg_sources_config, settings
 from app.db.repository import SqlAlchemyEpgRepository
 from app.db.session import session_scope
 from app.services.downloader import process_single_source
@@ -40,8 +40,8 @@ class FetchContext:
 @dataclass(slots=True)
 class SourceSummary:
     index: int
-    source_url: str
-    sanitized_url: str
+    source_name: str
+    time_offset_hours: float
     started_at: datetime
     completed_at: datetime
     status: Literal["success", "failed"]
@@ -58,8 +58,8 @@ class SourceSummary:
     def to_dict(self) -> dict:
         payload = {
             "source_index": self.index,
-            "source_url": self.source_url,
-            "sanitized_url": self.sanitized_url,
+            "source_name": self.source_name,
+            "time_offset_hours": self.time_offset_hours,
             "status": self.status,
             "channels_parsed": self.channels_parsed,
             "programs_parsed": self.programs_parsed,
@@ -85,8 +85,8 @@ class CollectionResult:
 class EPGFetchPipeline:
     """Coordinates download, parse, and persistence stages for a fetch cycle."""
 
-    def __init__(self, sources: Sequence[str]) -> None:
-        self.sources = [source for source in sources if source]
+    def __init__(self, sources: Sequence[EpgSourceConfig]) -> None:
+        self.sources = tuple(sources)
         self.total_sources = len(self.sources)
         self._parse_timeout = settings.epg_parse_timeout_sec
 
@@ -160,18 +160,14 @@ class EPGFetchPipeline:
         return deleted_past, deleted_future
 
     async def _collect_sources(self, context: FetchContext) -> CollectionResult:
-        if not self.sources:
-            logger.warning("No EPG sources configured - skipping fetch cycle")
-            return CollectionResult([], 0, 0, 0, None)
-
         summaries: list[SourceSummary] = []
         total_inserted = 0
         updated_channel_ids: set[str] = set()
         updated_sources_count = 0
         last_recorded_update_at: datetime | None = None
 
-        for index, source_url in enumerate(self.sources, start=1):
-            summary, changed_channel_ids = await self._process_source(index, source_url, context)
+        for index, source in enumerate(self.sources, start=1):
+            summary, changed_channel_ids = await self._process_source(index, source, context)
             summaries.append(summary)
 
             total_inserted += summary.programs_inserted
@@ -193,10 +189,9 @@ class EPGFetchPipeline:
     async def _process_source(
         self,
         index: int,
-        source_url: str,
+        source: EpgSourceConfig,
         context: FetchContext,
     ) -> tuple[SourceSummary, set[str]]:
-        sanitized_url = _sanitize_url_for_logging(source_url)
         started_at = datetime.now(timezone.utc)
         changed_channel_ids: set[str] = set()
         temp_file = None
@@ -211,28 +206,29 @@ class EPGFetchPipeline:
             parse_deadline = perf_counter() + self._parse_timeout
 
         logger.info(
-            "[Source %s/%s] Queued for download: %s",
+            "[Source %s/%s: %s] Queued for download (time correction: %s hours)",
             index,
-            self.total_sources or len(self.sources),
-            sanitized_url,
+            self.total_sources,
+            source.name,
+            source.time_offset_hours,
         )
         logger.info(
-            "[Source %s/%s] Starting download: %s",
+            "[Source %s/%s: %s] Starting download",
             index,
-            self.total_sources or len(self.sources),
-            sanitized_url,
+            self.total_sources,
+            source.name,
         )
 
         try:
-            temp_file = await process_single_source(source_url, index)
+            temp_file = await process_single_source(str(source.url), index, source.name)
             logger.info(
-                "[Source %s/%s] Download complete: %s",
+                "[Source %s/%s: %s] Download complete",
                 index,
-                self.total_sources or len(self.sources),
-                sanitized_url,
+                self.total_sources,
+                source.name,
             )
 
-            logger.info("[Source %s] Parsing channel rows", index)
+            logger.info("[Source %s: %s] Parsing channel rows", index, source.name)
             channels = await asyncio.to_thread(
                 parse_xmltv_channels,
                 temp_file,
@@ -247,17 +243,27 @@ class EPGFetchPipeline:
             async with session_scope(begin=False) as session:
                 repo = SqlAlchemyEpgRepository(session)
 
-                logger.info("[Source %s] Persisting %s channels", index, len(channels))
+                logger.info(
+                    "[Source %s: %s] Persisting %s channels",
+                    index,
+                    source.name,
+                    len(channels),
+                )
                 await repo.upsert_channels(channels)
                 await session.commit()
                 committed_changes = True
 
-                logger.info("[Source %s] Starting program batch parsing", index)
+                logger.info(
+                    "[Source %s: %s] Starting program batch parsing",
+                    index,
+                    source.name,
+                )
                 program_reader = XMLTVProgramBatchReader(
                     temp_file,
                     known_channel_ids=known_channel_ids,
                     time_from=context.window_start,
                     time_to=context.window_end,
+                    time_offset=timedelta(hours=source.time_offset_hours),
                     batch_size=settings.epg_programs_chunk_size,
                     deadline_monotonic=parse_deadline,
                 )
@@ -296,10 +302,10 @@ class EPGFetchPipeline:
                     skipped_unknown_channels,
                 )
             logger.info(
-                "[Source %s/%s] Completed source import: %s (%s channels, %s programs, %s affected rows)",
+                "[Source %s/%s: %s] Completed source import (%s channels, %s programs, %s affected rows)",
                 index,
-                self.total_sources or len(self.sources),
-                sanitized_url,
+                self.total_sources,
+                source.name,
                 channels_parsed,
                 programs_parsed,
                 programs_inserted,
@@ -307,8 +313,8 @@ class EPGFetchPipeline:
             return (
                 SourceSummary(
                     index=index,
-                    source_url=source_url,
-                    sanitized_url=sanitized_url,
+                    source_name=source.name,
+                    time_offset_hours=source.time_offset_hours,
                     started_at=started_at,
                     completed_at=completed_at,
                     status="success",
@@ -328,18 +334,19 @@ class EPGFetchPipeline:
             SQLAlchemyError,
         ) as exc:
             completed_at = datetime.now(timezone.utc)
+            safe_error = _safe_source_error(exc)
             logger.error(
-                "[Source %s] Failed to process %s: %s",
+                "[Source %s: %s] Failed to process source: %s",
                 index,
-                sanitized_url,
-                exc,
-                exc_info=True,
+                source.name,
+                safe_error,
+                exc_info=not isinstance(exc, httpx.HTTPError),
             )
             return (
                 SourceSummary(
                     index=index,
-                    source_url=source_url,
-                    sanitized_url=sanitized_url,
+                    source_name=source.name,
+                    time_offset_hours=source.time_offset_hours,
                     started_at=started_at,
                     completed_at=completed_at,
                     status="failed",
@@ -347,7 +354,7 @@ class EPGFetchPipeline:
                     programs_parsed=programs_parsed,
                     programs_inserted=programs_inserted,
                     committed_changes=committed_changes,
-                    error=str(exc),
+                    error=safe_error,
                 ),
                 changed_channel_ids,
             )
@@ -405,18 +412,19 @@ class EPGFetchPipeline:
         }
 
 
-def _sanitize_url_for_logging(url: str) -> str:
-    """Remove credentials from URL for safe logging."""
-    if "://" not in url:
-        return url
-    try:
-        protocol, rest = url.split("://", 1)
-        if "@" in rest:
-            rest = rest.split("@", 1)[1]
-            return f"{protocol}://***:***@{rest}"
-        return url
-    except (ValueError, IndexError):
-        return url
+def _safe_source_error(exc: Exception) -> str:
+    """Return an operational error message that cannot expose a source URL."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "Source download timed out"
+    if isinstance(exc, httpx.HTTPError):
+        return f"Source download failed ({type(exc).__name__})"
+    if isinstance(exc, TimeoutError):
+        return "Source processing timed out"
+    if isinstance(exc, ParseError):
+        return "Source returned invalid XML"
+    if isinstance(exc, SQLAlchemyError):
+        return "Database operation failed"
+    return str(exc)
 
 
 async def fetch_and_process() -> dict:
@@ -435,7 +443,7 @@ async def fetch_and_process() -> dict:
 
     async with _fetch_lock:
         logger.info("EPG fetch started at %s", datetime.now(timezone.utc).isoformat())
-        pipeline = EPGFetchPipeline(settings.epg_sources or [])
+        pipeline = EPGFetchPipeline(epg_sources_config.sources)
         result = await pipeline.run()
         logger.info("EPG fetch completed successfully")
         return result

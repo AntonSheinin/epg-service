@@ -1,0 +1,9 @@
+[[sources]]
+name = "Source One"
+url = "https://example.com/epg.xml.gz"
+time_offset_hours = 0
+
+[[sources]]
+name = "Source With Time Correction"
+url = "https://example.net/epg.xml.gz"
+time_offset_hours = -3

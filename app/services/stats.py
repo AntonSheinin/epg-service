@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db.orm_models import ImportStatusRecord
 from app.services.scheduler import epg_scheduler
 from app.utils.timezone import to_utc_iso8601_z
@@ -19,7 +18,6 @@ async def collect_stats(session: AsyncSession) -> dict:
     Collect service stats with a single lightweight query.
     """
     checked_at = datetime.now(timezone.utc)
-    configured_sources_count = len(settings.epg_sources or [])
     next_run = epg_scheduler.get_next_run_time()
 
     status_stmt = select(ImportStatusRecord).where(ImportStatusRecord.id == 1)
@@ -30,9 +28,7 @@ async def collect_stats(session: AsyncSession) -> dict:
     sources_total = status_row.last_updated_sources_count if status_row else None
 
     error: str | None = None
-    if configured_sources_count == 0:
-        error = "No enabled EPG sources configured."
-    elif last_epg_update_at is None:
+    if last_epg_update_at is None:
         error = "No EPG import recorded yet."
 
     return {

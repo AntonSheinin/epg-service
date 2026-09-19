@@ -75,6 +75,7 @@ class XMLTVProgramBatchReader:
         known_channel_ids: set[str],
         time_from: Optional[datetime],
         time_to: Optional[datetime],
+        time_offset: timedelta,
         batch_size: int,
         deadline_monotonic: float | None = None,
     ) -> None:
@@ -82,6 +83,7 @@ class XMLTVProgramBatchReader:
         self._known_channel_ids = known_channel_ids
         self._time_from = time_from
         self._time_to = time_to
+        self._time_offset = time_offset
         self._batch_size = max(1, batch_size)
         self._deadline_monotonic = deadline_monotonic
         self._context = ET.iterparse(
@@ -116,7 +118,12 @@ class XMLTVProgramBatchReader:
                     self._root.clear()
                 continue
 
-            program = _parse_single_program(elem, self._time_from, self._time_to)
+            program = _parse_single_program(
+                elem,
+                self._time_from,
+                self._time_to,
+                self._time_offset,
+            )
             if program is None:
                 self._root.clear()
                 continue
@@ -173,6 +180,7 @@ def _parse_single_program(
     programme: ET.Element,
     time_from: Optional[datetime],
     time_to: Optional[datetime],
+    time_offset: timedelta,
 ) -> Program | None:
     channel_id = programme.get("channel")
     start_str = programme.get("start")
@@ -183,8 +191,8 @@ def _parse_single_program(
         return None
 
     try:
-        start_time = _parse_xmltv_time(start_str)
-        stop_time = _parse_xmltv_time(stop_str)
+        start_time = _parse_xmltv_time(start_str) + time_offset
+        stop_time = _parse_xmltv_time(stop_str) + time_offset
     except (ValueError, IndexError, KeyError):
         return None
 

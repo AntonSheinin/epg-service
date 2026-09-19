@@ -24,6 +24,8 @@ epg-service/
 |-- Dockerfile
 |-- pyproject.toml
 |-- alembic.ini
+|-- config/
+|   `-- epg_sources.example.toml
 |-- alembic/
 |   |-- env.py
 |   `-- versions/
@@ -55,6 +57,7 @@ uv pip install -e .
 
 # Configure .env file (see Configuration section)
 cp .env.example .env
+cp config/epg_sources.example.toml config/epg_sources.toml
 
 # Run migrations
 alembic upgrade head
@@ -86,8 +89,8 @@ POSTGRES_DB=epg
 POSTGRES_USER=epg
 POSTGRES_PASSWORD=epg
 
-# EPG Sources (comma-separated URLs)
-EPG_SOURCES=https://source1.com/epg.xml,https://source2.com/epg.xml
+# EPG source configuration file
+EPG_SOURCES_FILE=config/epg_sources.toml
 
 # Logging
 LOG_LEVEL=INFO
@@ -106,6 +109,32 @@ EPG_PARSE_TIMEOUT_SEC=600
 ```
 
 When running the API outside Docker, use `DATABASE_URL=postgresql://epg:epg@localhost:5434/epg`.
+
+Configure XMLTV sources in `config/epg_sources.toml`:
+
+```toml
+[[sources]]
+name = "Source One"
+url = "https://example.com/epg.xml.gz"
+time_offset_hours = 0
+
+[[sources]]
+name = "Source With Time Correction"
+url = "https://example.net/epg.xml.gz"
+time_offset_hours = -3
+```
+
+`time_offset_hours` is a fixed correction applied after the timestamp and offset
+from XMLTV are converted to UTC. Positive values move programmes later and
+negative values move them earlier. Integer and fractional values from `-24` to
+`24` are supported. A change to this file requires a service restart.
+
+This correction does not apply daylight-saving rules. Update it manually if a
+source's error changes seasonally.
+
+The populated file is excluded from Git and the Docker build context because
+source URLs may contain access tokens. Docker Compose mounts it read-only at
+runtime; only `config/epg_sources.example.toml` is committed.
 
 **Cron Examples:**
 - `0 3 * * *` - Daily at 3:00 AM
@@ -153,6 +182,17 @@ Manually trigger EPG fetch from sources
 
 ```bash
 curl -X POST http://localhost:8000/fetch
+```
+
+Per-source results identify sources by configured name and report their applied
+time correction. Source URLs are not returned:
+
+```json
+{
+  "source_name": "Source With Time Correction",
+  "time_offset_hours": -3,
+  "status": "success"
+}
 ```
 
 ### POST /epg
@@ -310,10 +350,10 @@ See [pyproject.toml](pyproject.toml) for complete list.
 
 ## Troubleshooting
 
-**EPG_SOURCES not configured:**
-```env
-EPG_SOURCES=https://your-xmltv-source.com/epg.xml
-```
+**EPG source configuration is missing or invalid:**
+- Copy `config/epg_sources.example.toml` to `config/epg_sources.toml`.
+- Add at least one uniquely named HTTP/HTTPS source.
+- Restart the service after changing the file.
 
 **No programs found:**
 - Check XMLTV source accessibility

@@ -31,8 +31,7 @@ async def download_file(url: str, filename: str) -> Path:
     Raises:
         httpx.HTTPError: If download fails after retries
     """
-    logger.debug(f"Starting download from URL: {url}")
-    logger.debug(f"  Temporary filename: {filename}")
+    logger.debug("Starting EPG source download to temporary file %s", filename)
 
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
         for attempt in range(3):
@@ -72,10 +71,14 @@ async def download_file(url: str, filename: str) -> Path:
                 else:
                     logger.error("Download failed after 3 attempts due to timeout")
                     raise
-            except httpx.ConnectError as e:
+            except httpx.ConnectError:
                 if attempt < 2:
                     wait_time = 2 ** attempt
-                    logger.warning(f"Download attempt {attempt + 1}/3 failed: connection error ({e}). Retrying in {wait_time}s...")
+                    logger.warning(
+                        "Download attempt %s/3 failed: connection error. Retrying in %ss...",
+                        attempt + 1,
+                        wait_time,
+                    )
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error("Download failed after 3 attempts: unable to connect to server")

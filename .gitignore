@@ -42,6 +42,9 @@ data/*.db-wal
 .env.local
 .env.*.local
 
+# Local EPG source configuration
+config/epg_sources.toml
+
 # IDE
 .vscode/
 .idea/
@@ -65,9 +68,6 @@ htmlcov/
 *.temp
 /tmp/
 temp/
-
-# Docker
-.dockerignore
 
 # OS
 Thumbs.db

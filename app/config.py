@@ -1,11 +1,101 @@
 import logging
+import tomllib
+from pathlib import Path
+from typing import Annotated
 
 from apscheduler.triggers.cron import CronTrigger
-from pydantic import field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class EpgSourceConfig(BaseModel):
+    """Validated configuration for one XMLTV source."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        allow_inf_nan=False,
+    )
+
+    name: str = Field(min_length=1, max_length=100)
+    url: AnyHttpUrl
+    time_offset_hours: Annotated[StrictFloat, Field(ge=-24, le=24)] = 0.0
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        """Trim source names before applying length validation."""
+        return value.strip() if isinstance(value, str) else value
+
+
+class EpgSourcesConfig(BaseModel):
+    """Top-level EPG source file schema."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sources: tuple[EpgSourceConfig, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_sources(self) -> "EpgSourcesConfig":
+        """Reject duplicate source names and normalized URLs."""
+        names = [source.name.casefold() for source in self.sources]
+        if len(names) != len(set(names)):
+            raise ValueError("EPG source names must be unique")
+
+        urls = [str(source.url) for source in self.sources]
+        if len(urls) != len(set(urls)):
+            raise ValueError("EPG source URLs must be unique")
+
+        return self
+
+
+def _resolve_epg_sources_path(configured_path: Path) -> Path:
+    """Resolve relative source paths from the project root."""
+    if configured_path.is_absolute():
+        return configured_path
+    return (PROJECT_ROOT / configured_path).resolve()
+
+
+def _format_source_validation_error(exc: ValidationError) -> str:
+    """Format validation errors without exposing URL input values."""
+    messages = []
+    for error in exc.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in error["loc"])
+        messages.append(f"{location}: {error['msg']}")
+    return "; ".join(messages)
+
+
+def load_epg_sources(configured_path: Path) -> EpgSourcesConfig:
+    """Load and validate the TOML source configuration."""
+    source_path = _resolve_epg_sources_path(configured_path)
+    try:
+        with source_path.open("rb") as config_file:
+            payload = tomllib.load(config_file)
+    except FileNotFoundError:
+        raise ValueError(f"EPG source configuration not found: {source_path}") from None
+    except OSError:
+        raise ValueError(f"Unable to read EPG source configuration: {source_path}") from None
+    except tomllib.TOMLDecodeError:
+        raise ValueError("EPG source configuration contains invalid TOML") from None
+
+    try:
+        return EpgSourcesConfig.model_validate(payload)
+    except ValidationError as exc:
+        details = _format_source_validation_error(exc)
+        raise ValueError(f"Invalid EPG source configuration: {details}") from None
 
 
 class CustomSettings(BaseSettings):
@@ -15,7 +105,7 @@ class CustomSettings(BaseSettings):
     """
 
     database_url: str
-    epg_sources: list[str] | None = None
+    epg_sources_file: Path = Path("config/epg_sources.toml")
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
     epg_fetch_misfire_grace_sec: int = 3600  # Allow 1 hour to run missed jobs
     epg_channels_chunk_size: int = 1000
@@ -37,32 +127,6 @@ class CustomSettings(BaseSettings):
         """Ensure database URL is present."""
         if not value or not value.strip():
             raise ValueError("DATABASE_URL must be set")
-        return value
-
-    @field_validator("epg_sources", mode="before")
-    @classmethod
-    def parse_epg_sources(cls, value):
-        """Parse comma-separated URLs or list."""
-        if value is None:
-            return []
-        if isinstance(value, str):
-            if not value.strip():
-                return []
-            return [url.strip() for url in value.split(",") if url.strip()]
-        if isinstance(value, list):
-            return value
-        return []
-
-    @field_validator("epg_sources", mode="after")
-    @classmethod
-    def validate_epg_sources(cls, value):
-        """Validate EPG source URLs are HTTP/HTTPS."""
-        if not value:
-            return value
-
-        for url in value:
-            if not url.lower().startswith(("http://", "https://")):
-                raise ValueError(f"EPG source URL must be HTTP/HTTPS: {url}")
         return value
 
     @field_validator("max_epg_depth", "max_future_epg_limit")
@@ -112,11 +176,6 @@ class CustomSettings(BaseSettings):
     @model_validator(mode="after")
     def validate_epg_configuration(self):
         """Validate cross-field configuration."""
-        if not self.epg_sources:
-            logger.warning(
-                "No EPG sources configured - EPG fetch will not retrieve any data"
-            )
-
         if self.max_epg_depth == 0 and self.max_future_epg_limit == 0:
             raise ValueError(
                 "At least one of max_epg_depth or max_future_epg_limit must be > 0"
@@ -130,7 +189,7 @@ class CustomSettings(BaseSettings):
 
         logger.info("Configuration loaded:")
         logger.info("  Database URL configured")
-        logger.info("  EPG Sources: %s configured", len(self.epg_sources or []))
+        logger.info("  EPG Sources File: %s", self.epg_sources_file)
         logger.info("  Fetch Schedule: %s", self.epg_fetch_cron)
         logger.info("  Fetch Misfire Grace: %ss", self.epg_fetch_misfire_grace_sec)
         logger.info("  Channel Batch Size: %s", self.epg_channels_chunk_size)
@@ -144,6 +203,7 @@ class CustomSettings(BaseSettings):
 
 
 settings = CustomSettings()
+epg_sources_config = load_epg_sources(settings.epg_sources_file)
 
 
 def setup_logging() -> None:
@@ -153,3 +213,6 @@ def setup_logging() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # HTTP client request logs can contain token-bearing EPG source URLs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

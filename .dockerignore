@@ -1,0 +1,80 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+.venv
+venv
+ENV
+env
+
+# uv cache
+.uv
+
+# Database files (use volume instead)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment files (will be set via docker-compose)
+.env
+.env.local
+.env.*.local
+
+# Source URLs are mounted at runtime
+config/epg_sources.toml
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Testing
+tests/
+.pytest_cache
+.coverage
+htmlcov
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info
