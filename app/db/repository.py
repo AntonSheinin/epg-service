@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Channel, Program
+from app.models import Channel, LocalizedDescription, Program
 from app.db.orm_models import ChannelRecord, ImportStatusRecord, ProgramRecord
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ _PROGRAM_INSERT_COLUMNS = (
     "start_time",
     "stop_time",
     "title",
-    "description",
+    "descriptions",
     "created_at",
 )
 
@@ -35,6 +35,45 @@ def _chunked(items: Sequence, size: int) -> Sequence[Sequence]:
     """Yield list slices for batch processing."""
     for start_index in range(0, len(items), size):
         yield items[start_index:start_index + size]
+
+
+def _serialize_descriptions(
+    descriptions: Sequence[LocalizedDescription],
+) -> list[dict[str, str | None]]:
+    """Convert ordered domain descriptions to the JSONB storage shape."""
+    return [
+        {"language": description.language, "text": description.text}
+        for description in descriptions
+    ]
+
+
+def _deserialize_descriptions(value: object) -> tuple[LocalizedDescription, ...]:
+    """Convert JSONB data to safe, normalized domain descriptions."""
+    if not isinstance(value, list):
+        return ()
+
+    descriptions: list[LocalizedDescription] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+
+        raw_text = entry.get("text")
+        if not isinstance(raw_text, str):
+            continue
+        description_text = raw_text.strip()
+        if not description_text:
+            continue
+
+        raw_language = entry.get("language")
+        language = None
+        if isinstance(raw_language, str):
+            language = raw_language.strip().lower().replace("_", "-") or None
+
+        descriptions.append(
+            LocalizedDescription(language=language, text=description_text)
+        )
+
+    return tuple(descriptions)
 
 
 class SqlAlchemyEpgRepository:
@@ -194,7 +233,7 @@ class SqlAlchemyEpgRepository:
                         "start_time": program.start_time,
                         "stop_time": program.stop_time,
                         "title": program.title,
-                        "description": program.description,
+                        "descriptions": _serialize_descriptions(program.descriptions),
                         "created_at": created_at,
                     }
                 )
@@ -207,11 +246,11 @@ class SqlAlchemyEpgRepository:
                 index_elements=[ProgramRecord.id],
                 set_={
                     "stop_time": stmt.excluded.stop_time,
-                    "description": stmt.excluded.description,
+                    "descriptions": stmt.excluded.descriptions,
                 },
                 where=or_(
                     ProgramRecord.stop_time.is_distinct_from(stmt.excluded.stop_time),
-                    ProgramRecord.description.is_distinct_from(stmt.excluded.description),
+                    ProgramRecord.descriptions.is_distinct_from(stmt.excluded.descriptions),
                 ),
             )
             stmt = stmt.returning(ProgramRecord.xmltv_channel_id)
@@ -266,7 +305,7 @@ class SqlAlchemyEpgRepository:
                 start_time=row.start_time,
                 stop_time=row.stop_time,
                 title=row.title,
-                description=row.description,
+                descriptions=_deserialize_descriptions(row.descriptions),
                 created_at=row.created_at,
             )
             for row in rows

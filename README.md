@@ -8,6 +8,7 @@ Minimal EPG (Electronic Program Guide) service that fetches XMLTV data, parses i
 - **Sequential streaming fetch pipeline** - Processes sources one by one with bounded-memory parsing and batch writes
 - **Date range filtering** - Query EPG with required from_date and to_date parameters
 - **Timezone support** - Convert timestamps to any IANA timezone
+- **Multilingual descriptions** - Preserve XMLTV description languages and select `ru`, `en`, or `he` on request
 - **Smart data merging** - Automatic deduplication across sources
 - **SQLAlchemy ORM** - Type-safe database operations with PostgreSQL backend
 - **PostgreSQL storage** - Reliable concurrent read/write operations
@@ -207,7 +208,8 @@ Get EPG data for multiple channels with date range filtering and timezone conver
   ],
   "timezone": "Europe/London",
   "from_date": "2025-10-09T00:00:00Z",
-  "to_date": "2025-10-15T23:59:59Z"
+  "to_date": "2025-10-15T23:59:59Z",
+  "preferred_description_language": "en"
 }
 ```
 
@@ -216,6 +218,11 @@ Get EPG data for multiple channels with date range filtering and timezone conver
 - `from_date` (required): ISO8601 datetime for start of range
 - `to_date` (required): ISO8601 datetime for end of range
 - `timezone` (optional): IANA timezone for response (default: UTC)
+- `preferred_description_language` (optional): Exact description language preference. Accepted values are `ru`, `en`, and `he`; all other values are rejected.
+
+When a preferred language is supplied, the first non-empty description with that exact XMLTV language is returned. If the programme has no exact match, or the preference is omitted or `null`, the first non-empty description in the programme's original XML order is returned. The response continues to expose one nullable `description` string rather than the stored language metadata or complete description array.
+
+Descriptions migrated from the former singular database column have no language metadata and therefore act as fallbacks. A fresh XMLTV import is required before preferred-language matching is available for those programmes.
 
 **Response fields:**
 - `response_generated_at`: Time when this `/epg` response was generated, converted to the requested timezone.
@@ -269,7 +276,7 @@ PostgreSQL for concurrent read/write operations. Migrations are managed with Ale
 
 **Tables:**
 - `channels` - Channel metadata (xmltv_id, display_name, icon_url)
-- `programs` - Program data (id, channel_id, start_time, stop_time, title, description)
+- `programs` - Program data (id, channel_id, start_time, stop_time, title, descriptions)
 
 **Data Retention:**
 - Historical: Configurable via `MAX_EPG_DEPTH` (default 14 days)

@@ -17,6 +17,21 @@ XMLTV = """\
 </tv>
 """
 
+MULTILINGUAL_XMLTV = """\
+<tv>
+  <channel id="channel-1"><display-name>Channel One</display-name></channel>
+  <programme channel="channel-1" start="20260919100000 +0000" stop="20260919110000 +0000">
+    <title>Programme One</title>
+    <desc lang=" RU ">Первое описание</desc>
+    <desc lang="en_US">English <b>nested</b> text</desc>
+    <desc>Unlabelled fallback</desc>
+    <desc lang=" ">Blank-language fallback</desc>
+    <desc lang="ru">   </desc>
+    <desc lang="ru">Второе описание</desc>
+  </programme>
+</tv>
+"""
+
 
 class XMLTVTimeCorrectionTests(unittest.TestCase):
     def test_zero_offset_preserves_parsed_time(self) -> None:
@@ -84,6 +99,38 @@ class XMLTVTimeCorrectionTests(unittest.TestCase):
 
         self.assertEqual(len(batch.programs), 1)
         return batch.programs[0]
+
+
+class XMLTVDescriptionTests(unittest.TestCase):
+    def test_preserves_usable_descriptions_and_language_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "epg.xml"
+            path.write_text(MULTILINGUAL_XMLTV, encoding="utf-8")
+            reader = XMLTVProgramBatchReader(
+                path,
+                known_channel_ids={"channel-1"},
+                time_from=None,
+                time_to=None,
+                time_offset=timedelta(0),
+                batch_size=10,
+            )
+            try:
+                batch = reader.read_next_batch()
+            finally:
+                reader.close()
+
+        self.assertEqual(len(batch.programs), 1)
+        descriptions = batch.programs[0].descriptions
+        self.assertEqual(
+            [(item.language, item.text) for item in descriptions],
+            [
+                ("ru", "Первое описание"),
+                ("en-us", "English nested text"),
+                (None, "Unlabelled fallback"),
+                (None, "Blank-language fallback"),
+                ("ru", "Второе описание"),
+            ],
+        )
 
 
 if __name__ == "__main__":

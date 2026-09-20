@@ -17,6 +17,10 @@ class EPGRequest(BaseModel):
     timezone: str = Field(default="UTC", description="Timezone for response timestamps (e.g., 'UTC', 'Europe/London', 'America/New_York')")
     from_date: str = Field(..., description="ISO8601 datetime for start of EPG range (e.g., '2025-10-09T00:00:00Z')")
     to_date: str = Field(..., description="ISO8601 datetime for end of EPG range (e.g., '2025-10-10T00:00:00Z')")
+    preferred_description_language: Literal["ru", "en", "he"] | None = Field(
+        default=None,
+        description="Preferred language for programme descriptions",
+    )
 
     @field_validator('timezone')
     @classmethod

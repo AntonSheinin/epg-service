@@ -9,7 +9,7 @@ import hashlib
 import logging
 import xml.etree.ElementTree as ET
 
-from app.models import Channel, Program
+from app.models import Channel, LocalizedDescription, Program
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +200,7 @@ def _parse_single_program(
         return None
 
     title = title_text
-    description = _get_text(programme, "desc")
+    descriptions = _parse_descriptions(programme)
     program_id = _generate_deterministic_program_id(channel_id, start_time, title)
 
     return Program(
@@ -209,8 +209,29 @@ def _parse_single_program(
         start_time=start_time,
         stop_time=stop_time,
         title=title,
-        description=description,
+        descriptions=descriptions,
     )
+
+
+def _parse_descriptions(
+    programme: ET.Element,
+) -> tuple[LocalizedDescription, ...]:
+    descriptions: list[LocalizedDescription] = []
+    for element in programme.findall("desc"):
+        text = "".join(element.itertext()).strip()
+        if not text:
+            continue
+
+        raw_language = element.get("lang")
+        language = None
+        if raw_language is not None:
+            language = raw_language.strip().lower().replace("_", "-") or None
+
+        descriptions.append(
+            LocalizedDescription(language=language, text=text)
+        )
+
+    return tuple(descriptions)
 
 
 def _parse_xmltv_time(time_str: str) -> datetime:

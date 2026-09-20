@@ -15,6 +15,14 @@ class Channel:
     icon_url: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LocalizedDescription:
+    """Programme description with optional XMLTV language metadata."""
+
+    language: str | None
+    text: str
+
+
 @dataclass(slots=True)
 class Program:
     """Program entity."""
@@ -23,8 +31,8 @@ class Program:
     start_time: datetime
     stop_time: datetime
     title: str
-    description: str | None = None
+    descriptions: tuple[LocalizedDescription, ...] = ()
     created_at: datetime | None = None
 
 
-__all__ = ["Channel", "Program"]
+__all__ = ["Channel", "LocalizedDescription", "Program"]
