@@ -105,7 +105,7 @@ MAX_EPG_DEPTH=14
 # Future EPG limit (days to keep future programs)
 MAX_FUTURE_EPG_LIMIT=7
 
-# XML parsing timeout in seconds (set 0 to disable timeout)
+# Cumulative XML parsing budget per source in seconds; excludes download/storage (0 disables)
 EPG_PARSE_TIMEOUT_SEC=600
 ```
 
@@ -285,6 +285,16 @@ PostgreSQL for concurrent read/write operations. Migrations are managed with Ale
 
 ## Recent Improvements
 
+### Import Timeout and Diagnostics (2026-10-31)
+- Fixed premature import timeouts: the parsing budget now covers channel parsing
+  and all programme batches without counting downloads or database writes.
+- Added source timing summaries, per-batch timings, remaining parsing budget,
+  and DEBUG logs for parsing/storage starts without exposing source URLs.
+- Enabled the documented `LOG_LEVEL` setting; INFO remains the default.
+- Added regression coverage for cumulative parsing limits, slow storage, disabled
+  timeouts, partial import diagnostics, and download error sanitization.
+- Included the existing October 14 EPG Guide snapshot and channel coverage reports.
+
 ### SQLAlchemy Migration (v0.3.0)
 - Migrated from raw database access to SQLAlchemy ORM
 - Type-safe database operations with proper async support
@@ -366,6 +376,21 @@ See [pyproject.toml](pyproject.toml) for complete list.
 - Check XMLTV source accessibility
 - Verify XMLTV format validity
 - Check logs for parsing errors
+
+**Source processing timed out:**
+- Check the source's `Source timing summary` log for the failing stage, elapsed time,
+  configured timeout budget, time spent downloading (including decompression), parsing,
+  and storing rows, plus batch counts and committed changes.
+- Batch logs include parsing/storage duration and remaining parsing budget.
+  `EPG_PARSE_TIMEOUT_SEC` limits cumulative XML parsing time per source, across
+  channel parsing and all programme batches. Download, decompression, and database
+  writes do not consume this budget; `0` disables it. Expiration does not by itself
+  mean malformed XML.
+- A failed import can leave previously committed batches in the database. Global
+  `/stats` update time does not guarantee that every source finished successfully.
+- These diagnostics use source names and do not include source URLs.
+- Set `LOG_LEVEL=DEBUG` to also log when each batch starts parsing or storing,
+  which helps identify an operation that has not returned yet.
 
 **Can't access from network:**
 - Ensure server binds to `0.0.0.0` not `127.0.0.1`

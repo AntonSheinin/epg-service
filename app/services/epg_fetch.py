@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
@@ -28,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 # Global lock to prevent concurrent fetch operations
 _fetch_lock = asyncio.Lock()
+
+
+@contextmanager
+def _time_source_stage(durations: dict[str, float], stage: str) -> Iterator[None]:
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        durations[stage] += perf_counter() - started
 
 
 @dataclass(slots=True)
@@ -100,7 +110,7 @@ class EPGFetchPipeline:
             settings.max_future_epg_limit,
         )
         logger.info(
-            "XML parsing timeout per source: %s",
+            "Cumulative XML parsing timeout per source (download/storage excluded): %s",
             f"{self._parse_timeout}s" if self._parse_timeout else "disabled",
         )
         logger.info("Source processing mode: sequential")
@@ -193,6 +203,15 @@ class EPGFetchPipeline:
         context: FetchContext,
     ) -> tuple[SourceSummary, set[str]]:
         started_at = datetime.now(timezone.utc)
+        source_started = perf_counter()
+        stage = "download"
+        outcome = "interrupted"
+        durations = dict.fromkeys(
+            ("download", "channels_parse", "channels_store", "programs_parse", "programs_store"),
+            0.0,
+        )
+        file_size_bytes = 0
+        batch_number = 0
         changed_channel_ids: set[str] = set()
         temp_file = None
         program_reader: XMLTVProgramBatchReader | None = None
@@ -201,9 +220,7 @@ class EPGFetchPipeline:
         programs_parsed = 0
         programs_inserted = 0
         committed_changes = False
-        parse_deadline = None
-        if self._parse_timeout and self._parse_timeout > 0:
-            parse_deadline = perf_counter() + self._parse_timeout
+        parse_remaining = float(self._parse_timeout) if self._parse_timeout else None
 
         logger.info(
             "[Source %s/%s: %s] Queued for download (time correction: %s hours)",
@@ -220,20 +237,31 @@ class EPGFetchPipeline:
         )
 
         try:
-            temp_file = await process_single_source(str(source.url), index, source.name)
+            with _time_source_stage(durations, stage):
+                temp_file = await process_single_source(str(source.url), index, source.name)
+            file_size_bytes = temp_file.stat().st_size
             logger.info(
-                "[Source %s/%s: %s] Download complete",
+                "[Source %s/%s: %s] Download complete: elapsed=%.2fs, xml_bytes=%s",
                 index,
                 self.total_sources,
                 source.name,
+                durations["download"],
+                file_size_bytes,
             )
 
             logger.info("[Source %s: %s] Parsing channel rows", index, source.name)
-            channels = await asyncio.to_thread(
-                parse_xmltv_channels,
-                temp_file,
-                deadline_monotonic=parse_deadline,
-            )
+            stage = "channels_parse"
+            with _time_source_stage(durations, stage):
+                channels = await asyncio.to_thread(
+                    parse_xmltv_channels,
+                    temp_file,
+                    deadline_monotonic=perf_counter() + parse_remaining
+                    if parse_remaining is not None else None,
+                )
+            if parse_remaining is not None:
+                parse_remaining -= durations[stage]
+                if parse_remaining <= 0:
+                    raise TimeoutError("Cumulative XML parsing budget exhausted")
             if not channels:
                 raise ValueError("No channels found in XMLTV")
 
@@ -249,8 +277,10 @@ class EPGFetchPipeline:
                     source.name,
                     len(channels),
                 )
-                await repo.upsert_channels(channels)
-                await session.commit()
+                stage = "channels_store"
+                with _time_source_stage(durations, stage):
+                    await repo.upsert_channels(channels)
+                    await session.commit()
                 committed_changes = True
 
                 logger.info(
@@ -258,34 +288,68 @@ class EPGFetchPipeline:
                     index,
                     source.name,
                 )
-                program_reader = XMLTVProgramBatchReader(
-                    temp_file,
-                    known_channel_ids=known_channel_ids,
-                    time_from=context.window_start,
-                    time_to=context.window_end,
-                    time_offset=timedelta(hours=source.time_offset_hours),
-                    batch_size=settings.epg_programs_chunk_size,
-                    deadline_monotonic=parse_deadline,
-                )
-
-                batch_number = 0
+                stage = "programs_parse"
+                with _time_source_stage(durations, stage):
+                    program_reader = XMLTVProgramBatchReader(
+                        temp_file,
+                        known_channel_ids=known_channel_ids,
+                        time_from=context.window_start,
+                        time_to=context.window_end,
+                        time_offset=timedelta(hours=source.time_offset_hours),
+                        batch_size=settings.epg_programs_chunk_size,
+                    )
+                if parse_remaining is not None:
+                    parse_remaining -= durations[stage]
+                    if parse_remaining <= 0:
+                        raise TimeoutError("Cumulative XML parsing budget exhausted")
 
                 while True:
-                    batch = await asyncio.to_thread(program_reader.read_next_batch)
+                    stage = "programs_parse"
+                    parse_before = durations[stage]
+                    logger.debug(
+                        "[Source %s: %s] Reading program batch %s: parse_budget_remaining=%s",
+                        index, source.name, batch_number + 1, parse_remaining,
+                    )
+                    with _time_source_stage(durations, stage):
+                        batch = await asyncio.to_thread(
+                            program_reader.read_next_batch,
+                            deadline_monotonic=perf_counter() + parse_remaining
+                            if parse_remaining is not None else None,
+                        )
+                    batch_parse_seconds = durations[stage] - parse_before
+                    if parse_remaining is not None:
+                        parse_remaining -= batch_parse_seconds
+                        if parse_remaining <= 0:
+                            raise TimeoutError("Cumulative XML parsing budget exhausted")
                     skipped_unknown_channels += batch.skipped_unknown_channels
 
                     if batch.programs:
                         batch_number += 1
                         programs_parsed += len(batch.programs)
-                        upserted, batch_changed_channel_ids = await repo.upsert_programs(batch.programs)
+                        stage = "programs_store"
+                        store_before = durations[stage]
+                        logger.debug(
+                            "[Source %s: %s] Storing program batch %s: payload=%s",
+                            index, source.name, batch_number, len(batch.programs),
+                        )
+                        with _time_source_stage(durations, stage):
+                            upserted, batch_changed_channel_ids = await repo.upsert_programs(batch.programs)
+                        batch_store_seconds = durations[stage] - store_before
                         programs_inserted += upserted
                         changed_channel_ids.update(batch_changed_channel_ids)
                         logger.info(
-                            "[Source %s] Stored program batch %s: payload=%s, affected=%s",
+                            "[Source %s: %s] Stored program batch %s: payload=%s, affected=%s, "
+                            "parse=%.2fs, store=%.2fs, source_elapsed=%.2fs, parse_budget_remaining=%s",
                             index,
+                            source.name,
                             batch_number,
                             len(batch.programs),
                             upserted,
+                            batch_parse_seconds,
+                            batch_store_seconds,
+                            perf_counter() - source_started,
+                            f"{max(0.0, parse_remaining):.2f}s"
+                            if parse_remaining is not None else "disabled",
                         )
 
                     if batch.reached_eof:
@@ -295,6 +359,7 @@ class EPGFetchPipeline:
                     raise ValueError("No programs found in XMLTV")
 
             completed_at = datetime.now(timezone.utc)
+            outcome = "success"
             if skipped_unknown_channels:
                 logger.warning(
                     "[Source %s] Skipped %s program(s) with unknown channel IDs",
@@ -327,19 +392,20 @@ class EPGFetchPipeline:
             )
         except (
             httpx.HTTPError,
-            httpx.TimeoutException,
             TimeoutError,
             ValueError,
             ParseError,
             SQLAlchemyError,
         ) as exc:
+            outcome = "failed"
             completed_at = datetime.now(timezone.utc)
             safe_error = _safe_source_error(exc)
             logger.error(
-                "[Source %s: %s] Failed to process source: %s",
+                "[Source %s: %s] Failed to process source: %s (stage=%s)",
                 index,
                 source.name,
                 safe_error,
+                stage,
                 exc_info=not isinstance(exc, httpx.HTTPError),
             )
             return (
@@ -359,6 +425,18 @@ class EPGFetchPipeline:
                 changed_channel_ids,
             )
         finally:
+            logger.info(
+                "[Source %s: %s] Source timing summary: outcome=%s, stage=%s, elapsed=%.2fs, "
+                "timeout_budget=%ss, download=%.2fs, channels_parse=%.2fs, channels_store=%.2fs, "
+                "programs_parse=%.2fs, programs_store=%.2fs, xml_bytes=%s, "
+                "batches=%s, programs_parsed=%s, affected=%s, changed_channels=%s, "
+                "skipped_unknown_channels=%s, committed_changes=%s",
+                index, source.name, outcome, stage, perf_counter() - source_started,
+                self._parse_timeout, durations["download"], durations["channels_parse"],
+                durations["channels_store"], durations["programs_parse"], durations["programs_store"],
+                file_size_bytes, batch_number, programs_parsed, programs_inserted,
+                len(changed_channel_ids), skipped_unknown_channels, committed_changes,
+            )
             if program_reader is not None:
                 program_reader.close()
             if temp_file:

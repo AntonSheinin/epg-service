@@ -93,8 +93,10 @@ class XMLTVProgramBatchReader:
         _, self._root = next(self._context)
         self._reached_eof = False
 
-    def read_next_batch(self) -> ProgramBatch:
+    def read_next_batch(self, *, deadline_monotonic: float | None = None) -> ProgramBatch:
         """Read the next batch of valid programs."""
+        if deadline_monotonic is None:
+            deadline_monotonic = self._deadline_monotonic
         if self._reached_eof or self._context is None or self._root is None:
             return ProgramBatch(programs=[], reached_eof=True)
 
@@ -102,7 +104,7 @@ class XMLTVProgramBatchReader:
         skipped_unknown_channels = 0
 
         while len(programs) < self._batch_size:
-            _check_deadline(self._deadline_monotonic)
+            _check_deadline(deadline_monotonic)
             try:
                 event, elem = next(self._context)
             except StopIteration:
@@ -278,7 +280,7 @@ def _get_text(
 
 def _check_deadline(deadline_monotonic: float | None) -> None:
     if deadline_monotonic is not None and perf_counter() > deadline_monotonic:
-        raise TimeoutError("XML parsing timed out - file may be too large or malformed")
+        raise TimeoutError("XML parsing deadline expired")
 
 
 __all__ = ["ProgramBatch", "XMLTVProgramBatchReader", "parse_xmltv_channels"]

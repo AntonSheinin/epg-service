@@ -105,6 +105,7 @@ class CustomSettings(BaseSettings):
     """
 
     database_url: str
+    log_level: str = "INFO"
     epg_sources_file: Path = Path("config/epg_sources.toml")
     epg_fetch_cron: str = "0 3 * * *"  # Daily at 3 AM
     epg_fetch_misfire_grace_sec: int = 3600  # Allow 1 hour to run missed jobs
@@ -112,7 +113,7 @@ class CustomSettings(BaseSettings):
     epg_programs_chunk_size: int = 4000
     max_epg_depth: int = 14  # Days to keep past programs (archive)
     max_future_epg_limit: int = 7  # Days to keep future epg
-    epg_parse_timeout_sec: int = 600  # XML parsing timeout, 0 disables timeout
+    epg_parse_timeout_sec: int = 600  # Cumulative XML parsing seconds; 0 disables timeout
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -209,7 +210,7 @@ epg_sources_config = load_epg_sources(settings.epg_sources_file)
 def setup_logging() -> None:
     """Configure application logging."""
     logging.basicConfig(
-        level=logging.INFO,
+        level=settings.log_level.upper(),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
