@@ -3,15 +3,16 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
 
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY alembic.ini .
 COPY alembic/ ./alembic/
 COPY app/ ./app/
 COPY docker-entrypoint.sh ./
 
-RUN uv pip install --system --no-cache -r pyproject.toml
+RUN uv sync --locked --no-dev --no-install-project --no-cache
 RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
