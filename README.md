@@ -69,6 +69,11 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### Docker
 
+The image installs runtime dependencies from `uv.lock` using `uv sync --locked`.
+After changing `pyproject.toml`, run `uv lock` and commit both files before
+building. SQLAlchemy uses the `asyncio` extra to include `greenlet`, which is
+required by the async database layer and Alembic migrations.
+
 ```bash
 docker-compose up --build or
 docker-compose up -d --build
